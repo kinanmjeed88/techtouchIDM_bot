@@ -27,24 +27,52 @@ ADMIN_ID = os.environ.get('ADMIN_ID')
 # مراحل المحادثة
 KEYWORD, REPLY_TEXT = range(2)
 
-# --- الدوال تبقى كما هي ---
+# --- الدوال الأساسية للبوت ---
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text('بوت عمل احصائية')
 
 async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = update.message.text
     sent_message = await update.message.reply_text('جاري معالجة الرابط، يرجى الانتظار...')
-    ydl_opts = {'format': 'best', 'outtmpl': '%(title)s.%(ext)s', 'noplaylist': True}
+    
+    # إنشاء اسم ملف فريد وقصير باستخدام timestamp لحل مشكلة "File name too long"
+    output_filename = f"download_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
+    
+    ydl_opts = {
+        'format': 'best',
+        'outtmpl': output_filename, # استخدام اسم الملف المخصص
+        'noplaylist': True,
+        'ignoreerrors': True, # تجاهل الأخطاء ومحاولة المتابعة
+        'source_address': '0.0.0.0' # محاولة تجنب حظر IP (قد لا تعمل دائمًا)
+    }
+    
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
-            filename = ydl.prepare_filename(info)
-            await update.message.reply_document(document=open(filename, 'rb'), caption=info.get('title', ''))
-            os.remove(filename)
-            await sent_message.delete()
+            
+            # التحقق من وجود الملف قبل إرساله
+            if os.path.exists(output_filename):
+                video_title = info.get('title', 'Video')
+                await update.message.reply_document(document=open(output_filename, 'rb'), caption=video_title)
+                os.remove(output_filename)
+                await sent_message.delete()
+            else:
+                # هذا يحدث إذا فشل التحميل بصمت بسبب ignoreerrors
+                logger.error(f"Download of {url} completed but file '{output_filename}' not found.")
+                await sent_message.edit_text('عذراً، لم يتم العثور على الفيديو بعد اكتمال العملية. قد يكون المحتوى محميًا.')
+
     except Exception as e:
         logger.error(f"Error downloading {url}: {e}")
-        await sent_message.edit_text(f'حدث خطأ أثناء التحميل: {e}')
+        # عرض رسالة خطأ أكثر وضوحًا للمستخدم
+        error_message = str(e)
+        if '403: Forbidden' in error_message:
+            await sent_message.edit_text('عذراً، هذا المحتوى محمي ولا يمكن تحميله (خطأ 403).')
+        elif 'File name too long' in error_message:
+             await sent_message.edit_text('عذراً، عنوان الفيديو طويل جداً ولا يمكن حفظه.')
+        else:
+            await sent_message.edit_text('حدث خطأ أثناء التحميل. قد يكون المحتوى خاصاً أو غير مدعوم.')
+
 
 async def process_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.effective_message
