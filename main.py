@@ -10,18 +10,24 @@ import yt_dlp
 
 # استيراد الوحدات المخصصة
 from database import (
-    save_message, SessionLocal, Message, add_or_update_reply,
+    save_message, SessionLocal, Message, add_or_update_group,
     get_all_replies, delete_reply, update_message_reactions, get_top_reacted_messages,
-    add_or_update_group, remove_group, get_all_managed_groups
+    remove_group, get_all_managed_groups
 )
 from analysis import analyze_sentiment_hf
 
-# ... (الكود من إعدادات logging إلى نهاية دالة handle_reaction يبقى كما هو) ...
+# إعداد نظام التسجيل (Logging)
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# قراءة المتغيرات الحساسة
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
 ADMIN_ID = os.environ.get('ADMIN_ID')
+
+# مراحل المحادثة
 KEYWORD, REPLY_TEXT = range(2)
+
+# --- الوظائف الأساسية للبوت ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text('بوت عمل احصائية')
@@ -54,19 +60,19 @@ async def process_group_message(update: Update, context: ContextTypes.DEFAULT_TY
     group_id = message.chat.id
     message_id = message.message_id
     sentiment = analyze_sentiment_hf(message.text)
-    save_message(message_id, user_id, group_id, message.text, sentiment)
+    save_message(str(message_id), str(user_id), str(group_id), message.text, sentiment)
     logger.info(f"Saved message {message_id} from user {user_id} in group {group_id}")
 
 async def handle_reaction(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reaction = update.message_reaction
     message_id = reaction.message_id
-    positive_emojis = ['👍', '❤️', '🔥', '🥰', '👏', '😁', '🎉']
+    positive_emojis = ['👍', '❤️', '🔥', '🥰', '👏', '😁', '🎉', '💯']
     positive_count = 0
     if reaction.new_reaction:
         for r in reaction.new_reaction:
             if r.emoji in positive_emojis:
                 positive_count += 1
-    update_message_reactions(message_id, positive_count)
+    update_message_reactions(str(message_id), positive_count)
     logger.info(f"Updated reactions for message {message_id}. New positive count: {positive_count}")
 
 async def track_chats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -77,17 +83,31 @@ async def track_chats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if result.new_chat_member.user.id == context.bot.id:
         if new_member_status == "member":
             logger.info(f"Bot was added to group '{chat.title}' ({chat.id})")
-            add_or_update_group(chat.id, chat.title)
+            add_or_update_group(str(chat.id), chat.title)
         elif new_member_status in ["left", "kicked"]:
             logger.info(f"Bot was removed from group '{chat.title}' ({chat.id})")
-            remove_group(chat.id)
+            remove_group(str(chat.id))
 
-# --- تعديل لوحة التحكم الرئيسية (التصميم الجديد) ---
+async def register_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    chat = update.effective_chat
+    if str(user.id) != str(ADMIN_ID):
+        await update.message.reply_text("هذا الأمر مخصص للأدمن فقط.")
+        return
+    if chat.type not in [Chat.GROUP, Chat.SUPERGROUP]:
+        await update.message.reply_text("هذا الأمر يجب استخدامه داخل مجموعة.")
+        return
+    try:
+        add_or_update_group(str(chat.id), chat.title)
+        await update.message.reply_text(f"✅ تم تسجيل المجموعة '{chat.title}' بنجاح!")
+        logger.info(f"Group '{chat.title}' ({chat.id}) was manually registered by admin.")
+    except Exception as e:
+        await update.message.reply_text(f"حدث خطأ أثناء التسجيل: {e}")
+        logger.error(f"Failed to manually register group {chat.id}: {e}")
+
 async def show_control_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if str(user.id) != str(ADMIN_ID): return
-
-    # إرسال اللوحة في الخاص دائماً
     keyboard = [
         [InlineKeyboardButton("📊 طلب تقرير التحليل", callback_data='select_group_for_report')],
         [InlineKeyboardButton("⭐ أكثر التعليقات إعجاباً", callback_data='select_group_for_top_comments')],
@@ -95,23 +115,21 @@ async def show_control_panel(update: Update, context: ContextTypes.DEFAULT_TYPE)
         [InlineKeyboardButton("❌ إغلاق", callback_data='close_panel')],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-
     if update.message.chat.type != Chat.PRIVATE:
         await update.message.reply_text("تم إرسال لوحة التحكم إليك في الخاص.", reply_to_message_id=update.message.message_id)
-    
     await context.bot.send_message(chat_id=user.id, text='لوحة التحكم الرئيسية:', reply_markup=reply_markup)
 
-
-# ... (دوال المحادثة لإضافة رد تبقى كما هي) ...
 async def add_reply_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     await query.edit_message_text("تمام. أرسل الآن **الكلمة المفتاحية** التي تريد أن يرد عليها البوت.", parse_mode='Markdown')
     return KEYWORD
+
 async def get_keyword(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['keyword'] = update.message.text.strip()
     await update.message.reply_text("ممتاز. الآن أرسل **نص الرد**.", parse_mode='Markdown')
     return REPLY_TEXT
+
 async def get_reply_text_and_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyword = context.user_data['keyword']
     reply_text = update.message.text
@@ -120,6 +138,7 @@ async def get_reply_text_and_save(update: Update, context: ContextTypes.DEFAULT_
     context.user_data.clear()
     await show_replies_menu(update, context, from_conversation=True)
     return ConversationHandler.END
+
 async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("تم إلغاء العملية.")
     context.user_data.clear()
@@ -154,33 +173,24 @@ async def view_delete_replies(update: Update, context: ContextTypes.DEFAULT_TYPE
     reply_markup = InlineKeyboardMarkup(keyboard)
     await query.edit_message_text("اضغط على أي رد لحذفه:", reply_markup=reply_markup)
 
-
-# --- تعديل معالج الأزرار ليعكس التصميم الجديد ---
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     data = query.data
-
     if data == 'select_group_for_report' or data == 'select_group_for_top_comments':
         groups = get_all_managed_groups()
         if not groups:
             await query.edit_message_text("البوت لا يتواجد في أي مجموعات حالياً.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ عودة", callback_data='main_menu_private')]]))
             return
-        
         keyboard = []
-        # تحديد نوع الطلب بناءً على الزر الذي تم الضغط عليه
         request_type = 'get_analysis_report_' if data == 'select_group_for_report' else 'get_top_comments_'
-        
         for group in groups:
             keyboard.append([InlineKeyboardButton(group.group_title, callback_data=f'{request_type}{group.group_id}')])
-        
         keyboard.append([InlineKeyboardButton("⬅️ عودة للقائمة الرئيسية", callback_data='main_menu_private')])
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text("اختر مجموعة:", reply_markup=reply_markup)
-
     elif data.startswith('get_analysis_report_'):
         group_id = data.split('_', 2)[2]
-        # ... (كود إنشاء التقرير الكامل يبقى كما هو) ...
         await query.edit_message_text("جاري إعداد تقرير التحليل...")
         db = SessionLocal()
         try:
@@ -188,7 +198,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             messages = db.query(Message).filter(Message.group_id == group_id, Message.timestamp >= seven_days_ago).all()
             total_messages = len(messages)
             if total_messages == 0:
-                await query.edit_message_text("لا توجد رسائل لتحليلها في هذه المجموعة خلال آخر 7 أيام.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ عودة لاختيار مجموعة", callback_data='select_group_for_report')]]))
+                await query.edit_message_text("لا توجد رسائل لتحليلها في هذه المجموعة خلال آخر 7 أيام.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ عودة", callback_data='select_group_for_report')]]))
                 return
             positive_count = sum(1 for m in messages if m.sentiment == 'positive')
             negative_count = sum(1 for m in messages if m.sentiment == 'negative')
@@ -196,31 +206,26 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             positive_percent = (positive_count / total_messages) * 100 if total_messages > 0 else 0
             negative_percent = (negative_count / total_messages) * 100 if total_messages > 0 else 0
             neutral_percent = (neutral_count / total_messages) * 100 if total_messages > 0 else 0
-            report = (f"📊 **تقرير تحليل المجموعة لآخر 7 أيام** 📊\n\n"
-                      f"▪️ **إجمالي التعليقات:** {total_messages} تعليق\n\n"
-                      f"**📉 تحليل المشاعر:**\n"
+            report = (f"📊 **تقرير تحليل المشاعر لآخر 7 أيام**\n\n"
+                      f"▪️ **إجمالي التعليقات:** {total_messages}\n"
                       f"💚 **إيجابي:** {positive_percent:.1f}%\n"
                       f"💔 **سلبي:** {negative_percent:.1f}%\n"
-                      f"😐 **محايد:** {neutral_percent:.1f}%\n")
-            await query.edit_message_text(report, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ عودة لاختيار مجموعة", callback_data='select_group_for_report')]]))
+                      f"😐 **محايد:** {neutral_percent:.1f}%")
+            await query.edit_message_text(report, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ عودة", callback_data='select_group_for_report')]]))
         finally:
             db.close()
-
     elif data.startswith('get_top_comments_'):
         group_id = data.split('_', 2)[2]
         await query.edit_message_text("جاري جلب أكثر التعليقات تفاعلاً...")
-        top_messages = get_top_reacted_messages(group_id, limit=5) # يمكن زيادة العدد هنا
-        
-        report = "⭐ **أكثر التعليقات تفاعلاً في آخر 7 أيام** ⭐\n\n"
+        top_messages = get_top_reacted_messages(group_id, limit=5)
+        report = "⭐ **أكثر التعليقات تفاعلاً في آخر 7 أيام**\n\n"
         if not top_messages:
             report += "_لا توجد تعليقات حظيت بتفاعلات إيجابية._"
         else:
             for i, msg in enumerate(top_messages):
                 short_text = (msg.text[:70] + '...') if len(msg.text) > 70 else msg.text
                 report += f"{i+1}. \"{short_text}\"\n(👍 {msg.positive_reactions} | {msg.sentiment})\n\n"
-        
-        await query.edit_message_text(report, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ عودة لاختيار مجموعة", callback_data='select_group_for_top_comments')]]))
-
+        await query.edit_message_text(report, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ عودة", callback_data='select_group_for_top_comments')]]))
     elif data == 'manage_replies':
         await show_replies_menu(update, context)
     elif data == 'main_menu_private':
@@ -244,12 +249,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == 'close_panel':
         await query.message.delete()
 
-# --- دالة main (تبقى كما هي) ---
 def main() -> None:
     if not TELEGRAM_TOKEN or not ADMIN_ID:
         logger.error("خطأ: متغيرات البيئة TELEGRAM_TOKEN و ADMIN_ID مطلوبة.")
         return
+        
     application = Application.builder().token(TELEGRAM_TOKEN).build()
+
     conv_handler = ConversationHandler(
         entry_points=[CallbackQueryHandler(add_reply_start, pattern='^add_reply_start$')],
         states={
@@ -259,14 +265,22 @@ def main() -> None:
         fallbacks=[CommandHandler('cancel', cancel_conversation)],
         per_message=False 
     )
+
     application.add_handler(conv_handler)
     application.add_handler(CommandHandler("start", start))
+    
+    # --- التعديل هنا ---
+    # استخدام MessageHandler بدلاً من CommandHandler للاستجابة لكلمة "تسجيل"
+    application.add_handler(MessageHandler(filters.Regex(r'^تسجيل$'), register_group))
+    # --- نهاية التعديل ---
+
     application.add_handler(MessageHandler(filters.Regex(r'^يمان$'), show_control_panel))
     application.add_handler(CallbackQueryHandler(button_handler))
     application.add_handler(MessageReactionHandler(handle_reaction))
     application.add_handler(ChatMemberHandler(track_chats, ChatMemberHandler.MY_CHAT_MEMBER))
     application.add_handler(MessageHandler((filters.Entity("url") | filters.Entity("text_link")) & filters.ChatType.PRIVATE, handle_link))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS, process_group_message))
+
     logger.info("Bot is starting...")
     application.run_polling()
 
