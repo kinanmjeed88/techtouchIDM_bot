@@ -16,12 +16,18 @@ from database import (
 )
 from analysis import analyze_sentiment_hf
 
-# ... (الكود من إعدادات logging إلى نهاية track_chats يبقى كما هو) ...
+# إعداد نظام التسجيل (Logging)
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# قراءة المتغيرات الحساسة
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
 ADMIN_ID = os.environ.get('ADMIN_ID')
+
+# مراحل المحادثة
 KEYWORD, REPLY_TEXT = range(2)
+
+# --- الوظائف الأساسية للبوت ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text('بوت عمل احصائية')
@@ -41,21 +47,31 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Error downloading {url}: {e}")
         await sent_message.edit_text(f'حدث خطأ أثناء التحميل: {e}')
 
+# --- الدالة المصححة ---
 async def process_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """يعالج الرسائل النصية في المجموعات."""
     message = update.message
-    if not message or not message.text or message.text.startswith('/'): return
-    all_replies = get_all_replies()
-    message_lower = message.text.lower()
-    for reply in all_replies:
-        if reply.keyword.lower() in message_lower:
-            await message.reply_text(reply.reply_text)
-            return
+    
+    # 1. تجاهل الرسائل غير النصية أو الأوامر
+    if not message or not message.text or message.text.startswith('/'):
+        return
+
+    # 2. حفظ الرسالة وتحليلها (يحدث دائمًا)
     user_id = message.from_user.id
     group_id = message.chat.id
     message_id = message.message_id
     sentiment = analyze_sentiment_hf(message.text)
     save_message(str(message_id), str(user_id), str(group_id), message.text, sentiment)
     logger.info(f"Saved message {message_id} from user {user_id} in group {group_id}")
+
+    # 3. التحقق من وجود رد تلقائي (بعد الحفظ)
+    all_replies = get_all_replies()
+    message_lower = message.text.lower()
+    for reply in all_replies:
+        if reply.keyword.lower() in message_lower:
+            await message.reply_text(reply.reply_text)
+            # لا نستخدم return هنا، لأننا قد نريد تنفيذ إجراءات أخرى لاحقًا
+            break # نستخدم break للخروج من الحلقة فقط بعد العثور على أول رد
 
 async def handle_reaction(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reaction = update.message_reaction
@@ -82,34 +98,14 @@ async def track_chats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             logger.info(f"Bot was removed from group '{chat.title}' ({chat.id})")
             remove_group(str(chat.id))
 
-# --- دالة التشخيص ---
 async def register_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     chat = update.effective_chat
-
-    # --- بداية كود التشخيص ---
-    user_id_from_telegram = str(user.id)
-    admin_id_from_env = str(ADMIN_ID) # str() للتعامل مع حالة None
-
-    # رسالة تشخيصية نرسلها إلى المجموعة
-    debug_message = (
-        f"--- تشخيص الأدمن ---\n"
-        f"ID من تليجرام: `{user_id_from_telegram}` (الطول: {len(user_id_from_telegram)})\n"
-        f"ID من Railway: `{admin_id_from_env}` (الطول: {len(admin_id_from_env)})\n"
-        f"هل هما متطابقان؟ {'نعم' if user_id_from_telegram == admin_id_from_env else 'لا'}"
-    )
-    await update.message.reply_text(debug_message, parse_mode='Markdown')
-    # --- نهاية كود التشخيص ---
-
-    if user_id_from_telegram != admin_id_from_env:
-        # سنحتفظ بالرسالة القديمة للتأكيد
-        await update.message.reply_text("هذا الأمر مخصص للأدمن فقط. (فشل التحقق)")
+    if str(user.id) != str(ADMIN_ID):
+        # يمكنك حذف هذه الدالة بالكامل لاحقًا بعد تسجيل المجموعات
         return
-    
     if chat.type not in [Chat.GROUP, Chat.SUPERGROUP]:
-        await update.message.reply_text("هذا الأمر يجب استخدامه داخل مجموعة.")
         return
-        
     try:
         add_or_update_group(str(chat.id), chat.title)
         await update.message.reply_text(f"✅ تم تسجيل المجموعة '{chat.title}' بنجاح!")
@@ -118,7 +114,6 @@ async def register_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"حدث خطأ أثناء التسجيل: {e}")
         logger.error(f"Failed to manually register group {chat.id}: {e}")
 
-# ... (باقي الكود يبقى كما هو تمامًا) ...
 async def show_control_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if str(user.id) != str(ADMIN_ID): return
@@ -288,10 +283,4 @@ def main() -> None:
     application.add_handler(MessageReactionHandler(handle_reaction))
     application.add_handler(ChatMemberHandler(track_chats, ChatMemberHandler.MY_CHAT_MEMBER))
     application.add_handler(MessageHandler((filters.Entity("url") | filters.Entity("text_link")) & filters.ChatType.PRIVATE, handle_link))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS, process_group_message))
-
-    logger.info("Bot is starting...")
-    application.run_polling()
-
-if __name__ == "__main__":
-    main()
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND
