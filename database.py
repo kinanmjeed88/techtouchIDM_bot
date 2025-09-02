@@ -15,6 +15,9 @@ class Message(Base):
     __tablename__ = "messages"
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(String)
+    # --- الإضافة الجديدة ---
+    group_id = Column(String, index=True) # لتخزين معرف المجموعة
+    # --- نهاية الإضافة ---
     text = Column(String)
     sentiment = Column(String)
     timestamp = Column(DateTime, default=datetime.datetime.utcnow)
@@ -26,16 +29,19 @@ class AutoReply(Base):
     reply_text = Column(Text, nullable=False)
 
 def init_db():
+    # هذا الأمر سيقوم بإنشاء الأعمدة الجديدة إذا لم تكن موجودة
     Base.metadata.create_all(bind=engine)
 
-def save_message(user_id, text, sentiment):
+# --- تعديل دالة الحفظ ---
+def save_message(user_id: str, group_id: str, text: str, sentiment: str):
     db = SessionLocal()
     try:
-        db_message = Message(user_id=str(user_id), text=text, sentiment=sentiment)
+        db_message = Message(user_id=str(user_id), group_id=str(group_id), text=text, sentiment=sentiment)
         db.add(db_message)
         db.commit()
     finally:
         db.close()
+# --- نهاية التعديل ---
 
 def add_or_update_reply(keyword: str, reply_text: str):
     db = SessionLocal()
@@ -65,6 +71,7 @@ def delete_reply(keyword: str):
     db.close()
     return False
 
+# لا نعدل هذه الدالة لأن الردود التلقائية عامة لكل المجموعات
 def get_reply_for_keyword(text: str):
     db = SessionLocal()
     reply = db.query(AutoReply).filter(AutoReply.keyword == text.lower()).first()
@@ -73,5 +80,5 @@ def get_reply_for_keyword(text: str):
         return reply.reply_text
     return None
 
+# تأكد من استدعاء هذه الدالة عند بدء التشغيل
 init_db()
-
