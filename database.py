@@ -1,4 +1,4 @@
-# database.py
+# database.py (النسخة النهائية والمحسّنة)
 import os
 from sqlalchemy import create_engine, Column, Integer, String, Text, BigInteger, Boolean
 from sqlalchemy.orm import sessionmaker, declarative_base
@@ -22,7 +22,7 @@ except Exception as e:
 
 class User(Base):
     __tablename__ = "users"
-    id = Column(BigInteger, primary_key=True, index=True) # User ID
+    id = Column(BigInteger, primary_key=True, index=True)
     full_name = Column(String)
     username = Column(String, nullable=True)
     is_blocked = Column(Boolean, default=False)
@@ -42,6 +42,12 @@ class WhitelistedLink(Base):
     id = Column(Integer, primary_key=True, index=True)
     link_prefix = Column(String, unique=True, nullable=False)
 
+class AutoReply(Base):
+    __tablename__ = "auto_replies"
+    id = Column(Integer, primary_key=True, index=True)
+    keyword = Column(String, unique=True, nullable=False)
+    reply_text = Column(Text, nullable=False)
+
 class Settings(Base):
     __tablename__ = "settings"
     key = Column(String, primary_key=True)
@@ -60,7 +66,7 @@ def add_or_update_user(user_id: int, full_name: str, username: str):
         if user:
             user.full_name = full_name
             user.username = username
-            user.is_blocked = False # If they message, they are not blocked
+            user.is_blocked = False
         else:
             user = User(id=user_id, full_name=full_name, username=username)
             db.add(user)
@@ -92,12 +98,15 @@ def get_blocked_user_count():
     finally:
         db.close()
 
-# --- دوال الحظر والقائمة البيضاء ---
+# --- دوال مشتركة للقوائم ---
 
-def db_add_item(item, model):
+def db_add_item(item_data, model, column_name):
     db = SessionLocal()
     try:
-        new_item = model(item)
+        if isinstance(item_data, dict):
+            new_item = model(**item_data)
+        else:
+            new_item = model(**{column_name: item_data})
         db.add(new_item)
         db.commit()
         return True
@@ -107,26 +116,31 @@ def db_add_item(item, model):
     finally:
         db.close()
 
-def db_get_all_items(model):
+def db_get_all_items(model, column_name):
     db = SessionLocal()
     try:
-        # Dynamically get the attribute to query
-        column_attr = getattr(model, list(model.__table__.columns.keys())[1])
+        column_attr = getattr(model, column_name)
         return [item[0] for item in db.query(column_attr).all()]
     finally:
         db.close()
 
-def db_delete_item(item_to_delete, model):
+def db_delete_item(item_to_delete, model, column_name):
     db = SessionLocal()
     try:
-        # Dynamically get the attribute to query
-        column_attr = getattr(model, list(model.__table__.columns.keys())[1])
+        column_attr = getattr(model, column_name)
         item = db.query(model).filter(column_attr == item_to_delete).first()
         if item:
             db.delete(item)
             db.commit()
             return True
         return False
+    finally:
+        db.close()
+
+def get_all_auto_replies():
+    db = SessionLocal()
+    try:
+        return db.query(AutoReply).all()
     finally:
         db.close()
 
