@@ -1,5 +1,5 @@
 python-telegram-bot
 yt-dlp
 psycopg2-binary
-SQLAlchemy
+sqlalchemy
 requests
