@@ -3,4 +3,13 @@ yt-dlp
 psycopg2-binary
 sqlalchemy
 requests
-pyarabic-sentiment
+# --- الاعتماديات اليدوية لمكتبة التحليل ---
+pyarabic
+arabic-reshaper
+python-bidi
+Pillow
+numpy
+pandas
+scikit-learn
+tqdm
+farasa
