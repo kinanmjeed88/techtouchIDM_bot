@@ -11,11 +11,11 @@ import yt_dlp
 # استيراد الوحدات المخصصة
 from database import (
     save_message, SessionLocal, Message, add_or_update_reply,
-    get_all_replies, delete_reply, get_reply_for_keyword
+    get_all_replies, delete_reply, get_reply_for_keyword # سنستخدم get_all_replies
 )
 from analysis import analyze_sentiment_hf
 
-# إعداد نظام التسجيل (Logging) - تم تصحيح الخطأ هنا
+# إعداد نظام التسجيل (Logging)
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
@@ -29,9 +29,9 @@ ADMIN_ID = os.environ.get('ADMIN_ID')
 # مراحل المحادثة لإضافة رد جديد
 KEYWORD, REPLY_TEXT = range(2)
 
-# --- وظائف بوت التحميل (الوظيفة الأصلية) ---
+# --- وظائف البوت ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text('أهلاً بك! أرسل لي رابط فيديو لتحميله.')
+    await update.message.reply_text('بوت عمل احصائية')
 
 async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = update.message.text
@@ -49,35 +49,40 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
             filename = ydl.prepare_filename(info)
             await update.message.reply_document(document=open(filename, 'rb'), caption=info.get('title', ''))
             os.remove(filename)
-            await sent_message.delete() # حذف رسالة "جاري المعالجة"
+            await sent_message.delete()
     except Exception as e:
         logger.error(f"Error downloading {url}: {e}")
         await sent_message.edit_text(f'حدث خطأ أثناء التحميل: {e}')
 
-# --- معالجة الرسائل العادية في المجموعة ---
+# --- معالجة الرسائل العادية في المجموعة (تم تعديل هذه الدالة) ---
 
 async def process_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
     if not message or not message.text or message.text.startswith('/'):
         return
 
-    # 1. التحقق من وجود رد تلقائي (تطابق تام للكلمة)
-    reply_text = get_reply_for_keyword(message.text.strip())
-    if reply_text:
-        await message.reply_text(reply_text)
-        return # نتوقف هنا إذا وجدنا رداً تلقائياً
+    # 1. التحقق مما إذا كانت أي كلمة مفتاحية موجودة في الرسالة
+    all_replies = get_all_replies()  # نحصل على كل الردود من قاعدة البيانات
+    message_lower = message.text.lower()  # نحول الرسالة إلى حروف صغيرة لتجنب حساسية الحالة
 
-    # 2. إذا لم يكن هناك رد، نحلل المشاعر ونحفظ الرسالة
+    for reply in all_replies:
+        # نتحقق إذا كانت الكلمة المفتاحية (بحروف صغيرة) موجودة في نص الرسالة
+        if reply.keyword.lower() in message_lower:
+            await message.reply_text(reply.reply_text)
+            # ملاحظة: لا نقوم بحفظ الرسالة التي تم الرد عليها تلقائيًا في الإحصائيات
+            return  # نتوقف ونرد بأول تطابق نجده
+
+    # 2. إذا لم يتم العثور على رد، نحلل المشاعر ونحفظ الرسالة
     user_id = message.from_user.id
     sentiment = analyze_sentiment_hf(message.text)
     save_message(user_id, message.text, sentiment)
     logger.info(f"Saved message from {user_id} with sentiment: {sentiment}")
 
+
 # --- لوحة التحكم الرئيسية (عند كتابة "يمان") ---
 
 async def show_control_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    # تأكد من تحويل ADMIN_ID إلى سلسلة نصية للمقارنة
     if str(user.id) != str(ADMIN_ID): return
 
     keyboard = [
@@ -110,8 +115,6 @@ async def get_reply_text_and_save(update: Update, context: ContextTypes.DEFAULT_
     await update.message.reply_text(f"✅ تم الحفظ بنجاح!\nالكلمة: {keyword}\nالرد: {reply_text}")
     
     context.user_data.clear()
-    # نحتاج إلى طريقة لإعادة عرض القائمة بعد المحادثة
-    # سنقوم بإرسال رسالة جديدة بالقائمة
     await show_replies_menu(update, context, from_conversation=True)
     return ConversationHandler.END
 
@@ -133,7 +136,6 @@ async def show_replies_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, 
     message_text = "إدارة الردود التلقائية:"
     
     if from_conversation:
-        # إذا كنا قادمين من محادثة، لا يمكننا تعديل رسالة قديمة، لذا نرسل رسالة جديدة
         await update.message.reply_text(message_text, reply_markup=reply_markup)
     else:
         query = update.callback_query
@@ -162,7 +164,7 @@ async def view_delete_replies(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer() # مهم جداً لإخبار تليجرام أن الزر تم التعامل معه
+    await query.answer()
     data = query.data
 
     if data == 'get_analysis_report':
@@ -208,7 +210,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyword_to_delete = data.split('_', 1)[1]
         if delete_reply(keyword_to_delete):
             await query.answer(f"تم حذف الرد الخاص بـ '{keyword_to_delete}'")
-            # تحديث القائمة بعد الحذف
             await view_delete_replies(update, context)
         else:
             await query.answer("خطأ: لم يتم العثور على الرد.")
@@ -225,7 +226,6 @@ def main() -> None:
         
     application = Application.builder().token(TELEGRAM_TOKEN).build()
 
-    # محادثة إضافة الردود
     conv_handler = ConversationHandler(
         entry_points=[CallbackQueryHandler(add_reply_start, pattern='^add_reply_start$')],
         states={
@@ -233,19 +233,15 @@ def main() -> None:
             REPLY_TEXT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_reply_text_and_save)],
         },
         fallbacks=[CommandHandler('cancel', cancel_conversation)],
-        # السماح بإعادة الدخول إلى القوائم الأخرى
         per_message=False 
     )
 
     application.add_handler(conv_handler)
     application.add_handler(CommandHandler("start", start))
-    # استخدام تعبير عادي للتحقق من كلمة "يمان" فقط
     application.add_handler(MessageHandler(filters.Regex(r'^يمان$'), show_control_panel))
     
-    # معالج الأزرار يجب أن يكون له أولوية قبل معالج الرسائل العام
     application.add_handler(CallbackQueryHandler(button_handler))
     
-    # معالج الروابط
     application.add_handler(MessageHandler(filters.Entity("url") | filters.Entity("text_link"), handle_link))
     
     # معالج الرسائل العام يجب أن يكون في النهاية
