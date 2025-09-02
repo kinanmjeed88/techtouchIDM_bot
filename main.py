@@ -8,6 +8,8 @@ from telegram.ext import (
 )
 import yt_dlp
 
+# (بقية الكود يبقى كما هو تمامًا... سأضعه بالكامل للتأكيد)
+
 # استيراد الوحدات المخصصة
 from database import (
     save_message, SessionLocal, Message, add_or_update_group,
@@ -27,8 +29,37 @@ ADMIN_ID = os.environ.get('ADMIN_ID')
 # مراحل المحادثة
 KEYWORD, REPLY_TEXT = range(2)
 
-# --- الوظائف الأساسية للبوت ---
+# --- الدالة المصححة والنهائية ---
+async def process_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """يعالج الرسائل النصية في المجموعات والتعليقات: يحفظها أولاً، ثم يرد."""
+    # نستخدم update.effective_message لضمان أننا نتعامل مع الرسالة الصحيحة سواء كانت رسالة عادية أو تعليق
+    message = update.effective_message
+    
+    if not message or not message.text or message.text.startswith('/'):
+        return
 
+    try:
+        user_id = message.from_user.id
+        group_id = message.chat.id
+        message_id = message.message_id
+        sentiment = analyze_sentiment_hf(message.text)
+        
+        save_message(str(message_id), str(user_id), str(group_id), message.text, sentiment)
+        logger.info(f"SUCCESS: Saved message {message_id} from group {group_id}")
+    except Exception as e:
+        logger.error(f"ERROR: Failed to save message {message.message_id}. Reason: {e}", exc_info=True)
+
+    try:
+        all_replies = get_all_replies()
+        message_lower = message.text.lower()
+        for reply in all_replies:
+            if reply.keyword.lower() in message_lower:
+                await message.reply_text(reply.reply_text)
+                break
+    except Exception as e:
+        logger.error(f"ERROR: Failed to process auto-reply. Reason: {e}")
+
+# (بقية الدوال تبقى كما هي تمامًا)
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text('بوت عمل احصائية')
 
@@ -46,39 +77,6 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Error downloading {url}: {e}")
         await sent_message.edit_text(f'حدث خطأ أثناء التحميل: {e}')
-
-# --- الدالة المصححة والنهائية ---
-async def process_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """يعالج الرسائل النصية في المجموعات: يحفظها أولاً، ثم يرد."""
-    message = update.message
-    
-    # الخطوة 0: تجاهل الرسائل غير النصية أو الأوامر
-    if not message or not message.text or message.text.startswith('/'):
-        return
-
-    # الخطوة 1: حفظ الرسالة وتحليلها (يحدث دائمًا)
-    try:
-        user_id = message.from_user.id
-        group_id = message.chat.id
-        message_id = message.message_id
-        sentiment = analyze_sentiment_hf(message.text)
-        
-        save_message(str(message_id), str(user_id), str(group_id), message.text, sentiment)
-        logger.info(f"SUCCESS: Saved message {message_id} from group {group_id}")
-    except Exception as e:
-        logger.error(f"ERROR: Failed to save message {message.message_id}. Reason: {e}", exc_info=True)
-
-    # الخطوة 2: التحقق من وجود رد تلقائي (بعد الحفظ)
-    try:
-        all_replies = get_all_replies()
-        message_lower = message.text.lower()
-        for reply in all_replies:
-            if reply.keyword.lower() in message_lower:
-                await message.reply_text(reply.reply_text)
-                break # نخرج من الحلقة بعد العثور على أول رد
-    except Exception as e:
-        logger.error(f"ERROR: Failed to process auto-reply. Reason: {e}")
-
 
 async def handle_reaction(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reaction = update.message_reaction
@@ -286,7 +284,10 @@ def main() -> None:
     application.add_handler(MessageReactionHandler(handle_reaction))
     application.add_handler(ChatMemberHandler(track_chats, ChatMemberHandler.MY_CHAT_MEMBER))
     application.add_handler(MessageHandler((filters.Entity("url") | filters.Entity("text_link")) & filters.ChatType.PRIVATE, handle_link))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS, process_group_message))
+    
+    # --- التعديل النهائي والمهم ---
+    # هذا الفلتر الجديد يستمع للرسائل العادية في المجموعات وأيضًا للتعليقات على منشورات القنوات
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & (filters.ChatType.GROUPS | filters.REPLY), process_group_message))
 
     logger.info("Bot is starting...")
     application.run_polling()
