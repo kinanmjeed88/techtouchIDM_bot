@@ -1,36 +1,38 @@
 import logging
-from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+from pyarabic_sentiment.sentiment_analyzer import SentimentAnalyzer
 
 logger = logging.getLogger(__name__)
 
 # تهيئة المحلل مرة واحدة عند بدء التشغيل
-# هذا المحلل يعمل بشكل كامل دون الحاجة للإنترنت
-analyzer = SentimentIntensityAnalyzer()
+# هذه المكتبة حديثة ومتوافقة وتعمل محليًا
+sa = SentimentAnalyzer()
 
 def analyze_sentiment_hf(text: str) -> str:
     """
-    تحليل مشاعر النص باستخدام مكتبة VADER-Arabic التي تعمل محليًا.
+    تحليل مشاعر النص باستخدام مكتبة pyarabic-sentiment التي تعمل محليًا.
     """
     if not text or not text.strip():
         return 'neutral'
     
     try:
-        # استدعاء المحلل للحصول على درجات المشاعر
-        # سيعطينا قاموسًا مثل: {'neg': 0.0, 'neu': 0.5, 'pos': 0.5, 'compound': 0.8}
-        sentiment_scores = analyzer.polarity_scores(text)
+        # استدعاء المحلل للحصول على النتيجة
+        # سيعطينا قاموسًا مثل: {'negative': 0.8, 'neutral': 0.1, 'positive': 0.1}
+        result = sa.predict(text)
         
-        # استخدام درجة "compound" لتحديد الشعور العام
-        # هذه الدرجة تتراوح بين -1 (سلبي جدًا) و +1 (إيجابي جدًا)
-        compound_score = sentiment_scores['compound']
+        # العثور على الشعور الذي يمتلك أعلى درجة
+        # sentiment = max(result, key=result.get)
         
-        if compound_score >= 0.05:
+        # استخدام منطق أكثر دقة لتجنب التحيز نحو المحايد
+        pos_score = result.get('positive', 0)
+        neg_score = result.get('negative', 0)
+
+        if pos_score > neg_score and pos_score > 0.4:
             return 'positive'
-        elif compound_score <= -0.05:
+        elif neg_score > pos_score and neg_score > 0.4:
             return 'negative'
         else:
             return 'neutral'
 
     except Exception as e:
-        logger.error(f"VADER analysis failed: {e}", exc_info=True)
+        logger.error(f"PyArabic-Sentiment analysis failed: {e}", exc_info=True)
         return 'neutral'
-
