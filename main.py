@@ -299,8 +299,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # --- معالجة تقارير التفاعل ---
     elif data == "top_active_users_report":
         top_users = get_top_active_users()
-        report_text = "📈 *أكثر 5 مستخدمين تفاعلاً:*
-"
+        # إغلاق علامة الاقتباس في نفس السطر
+report_text = "📈 *أكثر 5 مستخدمين تفاعلاً:*"
         if top_users:
             for i, user_obj in enumerate(top_users):
                 # استخدام escape_markdown_v2 لكل من الاسم والمعرف
