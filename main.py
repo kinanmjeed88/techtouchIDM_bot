@@ -8,8 +8,6 @@ from telegram.ext import (
 )
 import yt_dlp
 
-# (بقية الكود يبقى كما هو تمامًا... سأضعه بالكامل للتأكيد)
-
 # استيراد الوحدات المخصصة
 from database import (
     save_message, SessionLocal, Message, add_or_update_group,
@@ -19,6 +17,7 @@ from database import (
 from analysis import analyze_sentiment_hf
 
 # إعداد نظام التسجيل (Logging)
+# غير مستوى التسجيل إلى DEBUG لرؤية كل الرسائل التشخيصية
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -29,37 +28,8 @@ ADMIN_ID = os.environ.get('ADMIN_ID')
 # مراحل المحادثة
 KEYWORD, REPLY_TEXT = range(2)
 
-# --- الدالة المصححة والنهائية ---
-async def process_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """يعالج الرسائل النصية في المجموعات والتعليقات: يحفظها أولاً، ثم يرد."""
-    # نستخدم update.effective_message لضمان أننا نتعامل مع الرسالة الصحيحة سواء كانت رسالة عادية أو تعليق
-    message = update.effective_message
-    
-    if not message or not message.text or message.text.startswith('/'):
-        return
+# --- الوظائف الأساسية للبوت ---
 
-    try:
-        user_id = message.from_user.id
-        group_id = message.chat.id
-        message_id = message.message_id
-        sentiment = analyze_sentiment_hf(message.text)
-        
-        save_message(str(message_id), str(user_id), str(group_id), message.text, sentiment)
-        logger.info(f"SUCCESS: Saved message {message_id} from group {group_id}")
-    except Exception as e:
-        logger.error(f"ERROR: Failed to save message {message.message_id}. Reason: {e}", exc_info=True)
-
-    try:
-        all_replies = get_all_replies()
-        message_lower = message.text.lower()
-        for reply in all_replies:
-            if reply.keyword.lower() in message_lower:
-                await message.reply_text(reply.reply_text)
-                break
-    except Exception as e:
-        logger.error(f"ERROR: Failed to process auto-reply. Reason: {e}")
-
-# (بقية الدوال تبقى كما هي تمامًا)
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text('بوت عمل احصائية')
 
@@ -78,6 +48,29 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Error downloading {url}: {e}")
         await sent_message.edit_text(f'حدث خطأ أثناء التحميل: {e}')
 
+async def process_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    message = update.effective_message
+    if not message or not message.text or message.text.startswith('/'):
+        return
+    try:
+        user_id = message.from_user.id
+        group_id = message.chat.id
+        message_id = message.message_id
+        sentiment = analyze_sentiment_hf(message.text)
+        save_message(str(message_id), str(user_id), str(group_id), message.text, sentiment)
+        logger.info(f"SUCCESS: Saved message {message_id} from group {group_id}")
+    except Exception as e:
+        logger.error(f"ERROR: Failed to save message {message.message_id}. Reason: {e}", exc_info=True)
+    try:
+        all_replies = get_all_replies()
+        message_lower = message.text.lower()
+        for reply in all_replies:
+            if reply.keyword.lower() in message_lower:
+                await message.reply_text(reply.reply_text)
+                break
+    except Exception as e:
+        logger.error(f"ERROR: Failed to process auto-reply. Reason: {e}")
+
 async def handle_reaction(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reaction = update.message_reaction
     message_id = reaction.message_id
@@ -85,7 +78,7 @@ async def handle_reaction(update: Update, context: ContextTypes.DEFAULT_TYPE):
     positive_count = 0
     if reaction.new_reaction:
         for r in reaction.new_reaction:
-            if r.emoji in positive_emojis:
+            if hasattr(r, 'emoji') and r.emoji in positive_emojis:
                 positive_count += 1
     update_message_reactions(str(message_id), positive_count)
     logger.info(f"Updated reactions for message {message_id}. New positive count: {positive_count}")
@@ -200,17 +193,37 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard.append([InlineKeyboardButton("⬅️ عودة", callback_data='main_menu_private')])
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text("اختر مجموعة:", reply_markup=reply_markup)
+
     elif data.startswith('get_analysis_report_'):
-        group_id = data.split('_', 2)[2]
+        group_id_from_button = data.split('_', 2)[2]
+        
+        # --- !! التشخيص هنا !! ---
+        logger.info("--- REPORTING CHECKPOINT 1 ---")
+        logger.info(f"Requesting report for group_id: '{group_id_from_button}' (Type: {type(group_id_from_button)})")
+        
         await query.edit_message_text("جاري إعداد تقرير التحليل...")
         db = SessionLocal()
         try:
-            seven_days_ago = datetime.datetime.utcnow() - datetime.timedelta(days=7)
-            messages = db.query(Message).filter(Message.group_id == group_id, Message.timestamp >= seven_days_ago).all()
+            all_messages_in_db = db.query(Message).all()
+            logger.info(f"Total messages in DB before filtering: {len(all_messages_in_db)}")
+            # طباعة أول 5 رسائل فقط لتجنب إغراق السجلات
+            for msg in all_messages_in_db[:5]:
+                logger.info(f"DB Sample: ID={msg.id}, GroupID='{msg.group_id}' (Type: {type(msg.group_id)})")
+            
+            seven_days_ago = datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=7)
+            
+            messages = db.query(Message).filter(
+                Message.group_id == group_id_from_button, 
+                Message.timestamp >= seven_days_ago
+            ).all()
+            
+            logger.info(f"Found {len(messages)} messages after filtering for group '{group_id_from_button}'.")
+
             total_messages = len(messages)
             if total_messages == 0:
                 await query.edit_message_text("لا توجد رسائل لتحليلها في هذه المجموعة.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ عودة", callback_data='select_group_for_report')]]))
                 return
+            
             positive_count = sum(1 for m in messages if m.sentiment == 'positive')
             negative_count = sum(1 for m in messages if m.sentiment == 'negative')
             neutral_count = total_messages - positive_count - negative_count
@@ -225,6 +238,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text(report, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ عودة", callback_data='select_group_for_report')]]))
         finally:
             db.close()
+
     elif data.startswith('get_top_comments_'):
         group_id = data.split('_', 2)[2]
         await query.edit_message_text("جاري جلب أكثر التعليقات تفاعلاً...")
@@ -237,8 +251,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 short_text = (msg.text[:70] + '...') if len(msg.text) > 70 else msg.text
                 report += f"{i+1}. \"{short_text}\"\n(👍 {msg.positive_reactions} | {msg.sentiment})\n\n"
         await query.edit_message_text(report, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ عودة", callback_data='select_group_for_top_comments')]]))
+    
     elif data == 'manage_replies':
         await show_replies_menu(update, context)
+    
     elif data == 'main_menu_private':
         keyboard = [
             [InlineKeyboardButton("📊 طلب تقرير التحليل", callback_data='select_group_for_report')],
@@ -248,8 +264,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text('لوحة التحكم الرئيسية:', reply_markup=reply_markup)
+    
     elif data == 'view_delete_replies':
         await view_delete_replies(update, context)
+    
     elif data.startswith('delete_'):
         keyword_to_delete = data.split('_', 1)[1]
         if delete_reply(keyword_to_delete):
@@ -257,6 +275,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await view_delete_replies(update, context)
         else:
             await query.answer("خطأ: لم يتم العثور على الرد.")
+    
     elif data == 'close_panel':
         await query.message.delete()
 
@@ -284,9 +303,6 @@ def main() -> None:
     application.add_handler(MessageReactionHandler(handle_reaction))
     application.add_handler(ChatMemberHandler(track_chats, ChatMemberHandler.MY_CHAT_MEMBER))
     application.add_handler(MessageHandler((filters.Entity("url") | filters.Entity("text_link")) & filters.ChatType.PRIVATE, handle_link))
-    
-    # --- التعديل النهائي والمهم ---
-    # هذا الفلتر الجديد يستمع للرسائل العادية في المجموعات وأيضًا للتعليقات على منشورات القنوات
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & (filters.ChatType.GROUPS | filters.REPLY), process_group_message))
 
     logger.info("Bot is starting...")
