@@ -45,6 +45,8 @@ class PrivateMessage(Base):
     __tablename__ = "private_messages"
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(String, nullable=False, index=True)
+    # تخزين معرّف الرسالة المعاد توجيهها للربط عند الرد
+    forwarded_message_id = Column(String, unique=True)
     message_text = Column(Text)
     timestamp = Column(DateTime, default=lambda: datetime.datetime.now(datetime.UTC))
 
@@ -64,17 +66,24 @@ def save_message(message_id: str, user_id: str, group_id: str, text: str, sentim
     finally:
         db.close()
 
-# --- !! الدالة المفقودة التي تم إضافتها الآن !! ---
-def save_private_message(user_id: str, text: str):
-    """حفظ رسالة خاصة جديدة من مستخدم."""
+def save_private_message(user_id: str, forwarded_message_id: str, text: str):
+    """حفظ رسالة خاصة جديدة من مستخدم مع معرّفها المعاد توجيهه."""
     db = SessionLocal()
     try:
-        db_message = PrivateMessage(user_id=user_id, message_text=text)
+        db_message = PrivateMessage(user_id=user_id, forwarded_message_id=forwarded_message_id, message_text=text)
         db.add(db_message)
         db.commit()
     finally:
         db.close()
-# --- نهاية الإضافة ---
+
+def get_user_id_from_forwarded_message(forwarded_message_id: str):
+    """الحصول على معرّف المستخدم الأصلي من خلال معرّف الرسالة المعاد توجيهها."""
+    db = SessionLocal()
+    try:
+        message = db.query(PrivateMessage).filter(PrivateMessage.forwarded_message_id == forwarded_message_id).first()
+        return message.user_id if message else None
+    finally:
+        db.close()
 
 def add_or_update_group(group_id: str, group_title: str):
     """إضافة مجموعة جديدة أو تحديث اسمها."""
