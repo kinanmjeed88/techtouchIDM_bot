@@ -17,7 +17,7 @@ from database import (
 from analysis import analyze_sentiment_hf
 
 # إعداد نظام التسجيل (Logging)
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.DEBUG)
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # قراءة المتغيرات الحساسة
@@ -47,34 +47,38 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Error downloading {url}: {e}")
         await sent_message.edit_text(f'حدث خطأ أثناء التحميل: {e}')
 
+# --- الدالة المصححة والنهائية ---
 async def process_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    logger.debug("--- [CHECKPOINT 1] process_group_message called ---")
+    """يعالج الرسائل النصية في المجموعات: يحفظها أولاً، ثم يرد."""
     message = update.message
+    
+    # الخطوة 0: تجاهل الرسائل غير النصية أو الأوامر
     if not message or not message.text or message.text.startswith('/'):
-        logger.debug("[CHECKPOINT 2] Message ignored (not text or is a command).")
         return
-    logger.debug(f"[CHECKPOINT 2] Message passed initial filter. Text: '{message.text}'")
+
+    # الخطوة 1: حفظ الرسالة وتحليلها (يحدث دائمًا)
     try:
         user_id = message.from_user.id
         group_id = message.chat.id
         message_id = message.message_id
-        logger.debug("[CHECKPOINT 3] Analyzing sentiment...")
         sentiment = analyze_sentiment_hf(message.text)
-        logger.debug(f"Sentiment is '{sentiment}'. Preparing to save.")
+        
         save_message(str(message_id), str(user_id), str(group_id), message.text, sentiment)
-        logger.info(f"--- [SUCCESS] Saved message {message_id} from user {user_id} in group {group_id} ---")
+        logger.info(f"SUCCESS: Saved message {message_id} from group {group_id}")
     except Exception as e:
-        logger.error(f"--- [ERROR] FAILED TO SAVE MESSAGE. Reason: {e} ---", exc_info=True)
+        logger.error(f"ERROR: Failed to save message {message.message_id}. Reason: {e}", exc_info=True)
+
+    # الخطوة 2: التحقق من وجود رد تلقائي (بعد الحفظ)
     try:
         all_replies = get_all_replies()
         message_lower = message.text.lower()
         for reply in all_replies:
             if reply.keyword.lower() in message_lower:
-                logger.debug(f"Found auto-reply for keyword '{reply.keyword}'.")
                 await message.reply_text(reply.reply_text)
-                break
+                break # نخرج من الحلقة بعد العثور على أول رد
     except Exception as e:
-        logger.error(f"--- [ERROR] FAILED TO PROCESS AUTO-REPLY. Reason: {e} ---")
+        logger.error(f"ERROR: Failed to process auto-reply. Reason: {e}")
+
 
 async def handle_reaction(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reaction = update.message_reaction
@@ -265,8 +269,6 @@ def main() -> None:
         
     application = Application.builder().token(TELEGRAM_TOKEN).build()
 
-    # --- إعادة ترتيب المعالجات ---
-    # 1. الأوامر المحددة (start, cancel)
     conv_handler = ConversationHandler(
         entry_points=[CallbackQueryHandler(add_reply_start, pattern='^add_reply_start$')],
         states={
@@ -278,22 +280,13 @@ def main() -> None:
     )
     application.add_handler(conv_handler)
     application.add_handler(CommandHandler("start", start))
-
-    # 2. المعالجات الخاصة بالأدمن (تستخدم Regex)
     application.add_handler(MessageHandler(filters.Regex(r'^تسجيل$'), register_group))
     application.add_handler(MessageHandler(filters.Regex(r'^يمان$'), show_control_panel))
-
-    # 3. معالجات التحديثات الخاصة (ردود الفعل، الأزرار، دخول/خروج البوت)
     application.add_handler(CallbackQueryHandler(button_handler))
     application.add_handler(MessageReactionHandler(handle_reaction))
     application.add_handler(ChatMemberHandler(track_chats, ChatMemberHandler.MY_CHAT_MEMBER))
-
-    # 4. معالج الروابط في الخاص
-    application.add_handler(MessageHandler(filters.Entity("url") | filters.Entity("text_link") & filters.ChatType.PRIVATE, handle_link))
-    
-    # 5. المعالج العام للرسائل النصية في المجموعات (يوضع في النهاية)
+    application.add_handler(MessageHandler((filters.Entity("url") | filters.Entity("text_link")) & filters.ChatType.PRIVATE, handle_link))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS, process_group_message))
-    # --- نهاية إعادة الترتيب ---
 
     logger.info("Bot is starting...")
     application.run_polling()
