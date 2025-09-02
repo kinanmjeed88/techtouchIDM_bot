@@ -2,71 +2,58 @@ import os
 import requests
 import logging
 
-# إعداد نظام التسجيل (Logging) لرؤية الأخطاء المحتملة
+# إعداد المسجل
 logger = logging.getLogger(__name__)
 
-# اسم النموذج الذي نريد استخدامه من Hugging Face
-MODEL_NAME = "CAMeL-Lab/bert-base-arabic-camelbert-da-sentiment"
-API_URL = f"https://api-inference.huggingface.co/models/{MODEL_NAME}"
+# قراءة التوكن من متغيرات البيئة
+HUGGINGFACE_TOKEN = os.environ.get("HUGGINGFACE_TOKEN")
 
-# قراءة التوكن من متغيرات البيئة في Railway
-# تأكد من أنك أضفت متغيرًا باسم "HUGGINGFACE_TOKEN" في إعدادات Railway
-HF_TOKEN = os.environ.get("HUGGINGFACE_TOKEN")
+# --- التعديل هنا: استخدام نموذج مختلف وموثوق ---
+# هذا النموذج متخصص في تحليل المشاعر للنصوص العربية
+API_URL = "https://api-inference.huggingface.co/models/akhooli/xlm-r-large-arabic-sent"
 
 def analyze_sentiment_hf(text: str) -> str:
     """
-    يحلل مشاعر النص العربي باستخدام Hugging Face Inference API.
-    يرجع 'positive', 'negative', أو 'neutral'.
+    يحلل مشاعر النص باستخدام واجهة برمجة تطبيقات Hugging Face.
     """
-    # التحقق من وجود النص والتوكن قبل إرسال الطلب
     if not text or not text.strip():
-        logger.warning("analyze_sentiment_hf called with empty text.")
-        return 'neutral'
-    
-    if not HF_TOKEN:
-        logger.error("HUGGINGFACE_TOKEN is not set in environment variables.")
         return 'neutral'
 
-    # إعداد رأس الطلب مع التوكن للمصادقة
-    headers = {"Authorization": f"Bearer {HF_TOKEN}"}
-    
+    if not HUGGINGFACE_TOKEN:
+        logger.warning("HUGGINGFACE_TOKEN is not set. Returning 'neutral'.")
+        return 'neutral'
+
+    headers = {"Authorization": f"Bearer {HUGGINGFACE_TOKEN}"}
+    payload = {"inputs": text}
+
     try:
-        # إرسال الطلب إلى الـ API
-        response = requests.post(API_URL, headers=headers, json={"inputs": text, "options": {"wait_for_model": True}})
-        
-        # التحقق من نجاح الطلب
-        if response.status_code != 200:
+        response = requests.post(API_URL, headers=headers, json=payload, timeout=15)
+
+        if response.status_code == 200:
+            result = response.json()
+            # هيكل الرد قد يختلف بين النماذج، لذا نجعله مرنًا
+            if isinstance(result, list) and result and isinstance(result[0], list) and result[0]:
+                # العثور على التصنيف الأعلى درجة
+                top_label = max(result[0], key=lambda x: x['score'])
+                label = top_label['label'].lower()
+
+                # توحيد التصنيفات (قد تكون 'POSITIVE', 'NEGATIVE', 'NEUTRAL')
+                if 'positive' in label:
+                    return 'positive'
+                elif 'negative' in label:
+                    return 'negative'
+                else:
+                    return 'neutral'
+            else:
+                logger.warning(f"Unexpected API response format: {result}")
+                return 'neutral'
+        else:
             logger.error(f"Hugging Face API Error: Status Code {response.status_code} - Response: {response.text}")
             return 'neutral'
 
-        result = response.json()
-        
-        # التأكد من أن النتيجة بالتنسيق المتوقع
-        if not isinstance(result, list) or not result or not isinstance(result[0], list):
-            logger.error(f"Unexpected API response format: {result}")
-            return 'neutral'
-
-        # استخراج النتيجة ذات أعلى درجة ثقة
-        highest_score_label = ""
-        highest_score = 0.0
-        for label_data in result[0]:
-            if label_data.get('score', 0) > highest_score:
-                highest_score = label_data['score']
-                highest_score_label = label_data['label']
-        
-        # النموذج يرجع "LABEL_0", "LABEL_1", "LABEL_2"
-        # نقوم بترجمتها إلى كلمات مفهومة
-        if highest_score_label == "LABEL_2": # إيجابي
-            return 'positive'
-        elif highest_score_label == "LABEL_0": # سلبي
-            return 'negative'
-        else: # محايد (LABEL_1)
-            return 'neutral'
-
-    except requests.exceptions.RequestException as e:
-        logger.error(f"A network error occurred during sentiment analysis: {e}")
+    except requests.RequestException as e:
+        logger.error(f"Hugging Face request failed: {e}")
         return 'neutral'
     except Exception as e:
-        logger.error(f"An unexpected error occurred during sentiment analysis: {e}")
+        logger.error(f"An unexpected error occurred in sentiment analysis: {e}")
         return 'neutral'
-
