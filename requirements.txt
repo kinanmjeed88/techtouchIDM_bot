@@ -3,13 +3,7 @@ yt-dlp
 psycopg2-binary
 sqlalchemy
 requests
-# --- الاعتماديات اليدوية لمكتبة التحليل ---
-pyarabic
-arabic-reshaper
-python-bidi
-Pillow
-numpy
-pandas
-scikit-learn
-tqdm
-farasa
+# --- الاعتماديات الجديدة لتحليل المشاعر ---
+arabert
+torch
+transformers
