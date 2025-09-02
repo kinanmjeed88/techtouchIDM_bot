@@ -17,7 +17,8 @@ from database import (
 from analysis import analyze_sentiment_hf
 
 # إعداد نظام التسجيل (Logging)
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+# تغيير المستوى إلى DEBUG لرؤية كل شيء
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 # قراءة المتغيرات الحساسة
@@ -27,7 +28,49 @@ ADMIN_ID = os.environ.get('ADMIN_ID')
 # مراحل المحادثة
 KEYWORD, REPLY_TEXT = range(2)
 
-# --- الوظائف الأساسية للبوت ---
+# --- دالة التشخيص الرئيسية ---
+async def process_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """يعالج الرسائل النصية في المجموعات مع تسجيل مفصل."""
+    logger.debug("--- [CHECKPOINT 1] process_group_message called ---")
+    message = update.message
+    
+    if not message or not message.text or message.text.startswith('/'):
+        logger.debug("[CHECKPOINT 2] Message ignored (not text or is a command).")
+        return
+
+    logger.debug(f"[CHECKPOINT 2] Message passed initial filter. Text: '{message.text}'")
+
+    try:
+        user_id = message.from_user.id
+        group_id = message.chat.id
+        message_id = message.message_id
+        
+        logger.debug("[CHECKPOINT 3] Analyzing sentiment...")
+        sentiment = analyze_sentiment_hf(message.text)
+        logger.debug(f"Sentiment is '{sentiment}'. Preparing to save.")
+
+        save_message(str(message_id), str(user_id), str(group_id), message.text, sentiment)
+        
+        logger.info(f"--- [SUCCESS] Saved message {message_id} from user {user_id} in group {group_id} ---")
+
+    except Exception as e:
+        logger.error(f"--- [ERROR] FAILED TO SAVE MESSAGE. Reason: {e} ---", exc_info=True)
+        # exc_info=True سيطبع الخطأ الكامل
+
+    # التحقق من الرد التلقائي (يحدث بغض النظر عن نجاح الحفظ)
+    try:
+        all_replies = get_all_replies()
+        message_lower = message.text.lower()
+        for reply in all_replies:
+            if reply.keyword.lower() in message_lower:
+                logger.debug(f"Found auto-reply for keyword '{reply.keyword}'.")
+                await message.reply_text(reply.reply_text)
+                break
+    except Exception as e:
+        logger.error(f"--- [ERROR] FAILED TO PROCESS AUTO-REPLY. Reason: {e} ---")
+
+# --- باقي الكود يبقى كما هو ---
+# (لقد نسخت لك الكود بالكامل أدناه للتأكد من عدم وجود أخطاء)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text('بوت عمل احصائية')
@@ -46,25 +89,6 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Error downloading {url}: {e}")
         await sent_message.edit_text(f'حدث خطأ أثناء التحميل: {e}')
-
-async def process_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    message = update.message
-    if not message or not message.text or message.text.startswith('/'):
-        return
-
-    user_id = message.from_user.id
-    group_id = message.chat.id
-    message_id = message.message_id
-    sentiment = analyze_sentiment_hf(message.text)
-    save_message(str(message_id), str(user_id), str(group_id), message.text, sentiment)
-    logger.info(f"Saved message {message_id} from user {user_id} in group {group_id}")
-
-    all_replies = get_all_replies()
-    message_lower = message.text.lower()
-    for reply in all_replies:
-        if reply.keyword.lower() in message_lower:
-            await message.reply_text(reply.reply_text)
-            break
 
 async def handle_reaction(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reaction = update.message_reaction
@@ -275,10 +299,7 @@ def main() -> None:
     application.add_handler(MessageReactionHandler(handle_reaction))
     application.add_handler(ChatMemberHandler(track_chats, ChatMemberHandler.MY_CHAT_MEMBER))
     application.add_handler(MessageHandler((filters.Entity("url") | filters.Entity("text_link")) & filters.ChatType.PRIVATE, handle_link))
-    
-    # --- السطر المصحح ---
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS, process_group_message))
-    # --- نهاية التصحيح ---
 
     logger.info("Bot is starting...")
     application.run_polling()
