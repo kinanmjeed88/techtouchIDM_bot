@@ -15,35 +15,20 @@ from database import (
 )
 from analysis import analyze_sentiment_hf
 
-# إعداد نظام التسجيل (Logging)
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
+# ... (الكود من إعدادات logging إلى نهاية دالة handle_link يبقى كما هو) ...
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-# قراءة المتغيرات الحساسة من بيئة التشغيل (Railway Variables)
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
 ADMIN_ID = os.environ.get('ADMIN_ID')
-
-# مراحل المحادثة لإضافة رد جديد
 KEYWORD, REPLY_TEXT = range(2)
 
-# --- وظائف البوت ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text('بوت عمل احصائية')
 
 async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # هذه الدالة ستعمل الآن فقط في المحادثات الخاصة
     url = update.message.text
     sent_message = await update.message.reply_text('جاري معالجة الرابط، يرجى الانتظار...')
-    
-    ydl_opts = {
-        'format': 'best',
-        'outtmpl': '%(title)s.%(ext)s',
-        'noplaylist': True,
-    }
-    
+    ydl_opts = {'format': 'best', 'outtmpl': '%(title)s.%(ext)s', 'noplaylist': True}
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
@@ -55,7 +40,7 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Error downloading {url}: {e}")
         await sent_message.edit_text(f'حدث خطأ أثناء التحميل: {e}')
 
-# --- معالجة الرسائل العادية في المجموعة ---
+# --- تعديل دالة معالجة رسائل المجموعة ---
 async def process_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
     if not message or not message.text or message.text.startswith('/'):
@@ -70,25 +55,33 @@ async def process_group_message(update: Update, context: ContextTypes.DEFAULT_TY
             return
 
     user_id = message.from_user.id
+    group_id = message.chat.id  # نحصل على معرف المجموعة من الرسالة
+    
     sentiment = analyze_sentiment_hf(message.text)
-    save_message(user_id, message.text, sentiment)
-    logger.info(f"Saved message from {user_id} with sentiment: {sentiment}")
+    # نمرر معرف المجموعة عند حفظ الرسالة
+    save_message(user_id, group_id, message.text, sentiment)
+    logger.info(f"Saved message from user {user_id} in group {group_id} with sentiment: {sentiment}")
 
-# --- لوحة التحكم الرئيسية ---
+# --- تعديل لوحة التحكم ---
 async def show_control_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if str(user.id) != str(ADMIN_ID): return
 
-    keyboard = [
-        [InlineKeyboardButton("📊 طلب تقرير التحليل", callback_data='get_analysis_report')],
-        [InlineKeyboardButton("💬 إدارة الردود التلقائية", callback_data='manage_replies')],
-        [InlineKeyboardButton("❌ إغلاق", callback_data='close_panel')],
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text('لوحة تحكم البوت:', reply_markup=reply_markup)
+    # التحقق إذا كانت الرسالة في مجموعة
+    if update.message.chat.type in [Chat.GROUP, Chat.SUPERGROUP]:
+        keyboard = [
+            # نمرر معرف المجموعة في callback_data
+            [InlineKeyboardButton("📊 طلب تقرير لهذه المجموعة", callback_data=f'get_analysis_report_{update.message.chat.id}')],
+            [InlineKeyboardButton("💬 إدارة الردود التلقائية (عام)", callback_data='manage_replies')],
+            [InlineKeyboardButton("❌ إغلاق", callback_data='close_panel')],
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text(f'لوحة تحكم المجموعة:\n`{update.message.chat.title}`', reply_markup=reply_markup, parse_mode='Markdown')
+    else:
+        # إذا كان في الخاص، لا يمكن طلب تقرير
+        await update.message.reply_text('يمكن استخدام لوحة التحكم الكاملة داخل المجموعات فقط.')
 
-# --- باقي الدوال (محادثات، أزرار، إلخ) تبقى كما هي ---
-# ... (الكود من get_keyword إلى button_handler يبقى بدون تغيير) ...
+# ... (الكود من get_keyword إلى view_delete_replies يبقى كما هو) ...
 async def add_reply_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -143,40 +136,50 @@ async def view_delete_replies(update: Update, context: ContextTypes.DEFAULT_TYPE
     reply_markup = InlineKeyboardMarkup(keyboard)
     await query.edit_message_text("اضغط على أي رد لحذفه:", reply_markup=reply_markup)
 
+# --- تعديل معالج الأزرار ---
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     data = query.data
-    if data == 'get_analysis_report':
-        await query.edit_message_text("جاري إعداد التقرير...")
+
+    # تعديل منطق طلب التقرير
+    if data.startswith('get_analysis_report_'):
+        group_id = data.split('_', 2)[2] # استخراج معرف المجموعة من callback_data
+        await query.edit_message_text("جاري إعداد التقرير لهذه المجموعة...")
         db = SessionLocal()
         try:
             seven_days_ago = datetime.datetime.utcnow() - datetime.timedelta(days=7)
-            messages = db.query(Message).filter(Message.timestamp >= seven_days_ago).all()
+            # فلترة الرسائل بناءً على معرف المجموعة
+            messages = db.query(Message).filter(Message.group_id == group_id, Message.timestamp >= seven_days_ago).all()
+            
             total_messages = len(messages)
             if total_messages == 0:
-                await query.edit_message_text("لا توجد رسائل لتحليلها في آخر 7 أيام.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ عودة للقائمة الرئيسية", callback_data='main_menu')]]))
+                await query.edit_message_text("لا توجد رسائل لتحليلها في هذه المجموعة خلال آخر 7 أيام.")
                 return
+
             positive_count = sum(1 for m in messages if m.sentiment == 'positive')
             negative_count = sum(1 for m in messages if m.sentiment == 'negative')
             neutral_count = total_messages - positive_count - negative_count
+
             positive_percent = (positive_count / total_messages) * 100
             negative_percent = (negative_count / total_messages) * 100
             neutral_percent = (neutral_count / total_messages) * 100
+
             report = (f"📊 **تقرير تحليل المجموعة لآخر 7 أيام** 📊\n\n"
                       f"▪️ **إجمالي التعليقات:** {total_messages} تعليق\n\n"
                       f"**📉 تحليل المشاعر:**\n"
                       f"💚 **إيجابي:** {positive_percent:.1f}%\n"
                       f"💔 **سلبي:** {negative_percent:.1f}%\n"
                       f"😐 **محايد:** {neutral_percent:.1f}%\n")
-            await query.edit_message_text(report, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ عودة للقائمة الرئيسية", callback_data='main_menu')]]))
+            # لا نضيف زر عودة هنا لأن لوحة التحكم قد حُذفت أو تغيرت
+            await query.edit_message_text(report, parse_mode='Markdown')
         finally:
             db.close()
+
     elif data == 'manage_replies':
         await show_replies_menu(update, context)
-    elif data == 'main_menu':
-        keyboard = [[InlineKeyboardButton("📊 طلب تقرير التحليل", callback_data='get_analysis_report')], [InlineKeyboardButton("💬 إدارة الردود التلقائية", callback_data='manage_replies')], [InlineKeyboardButton("❌ إغلاق", callback_data='close_panel')]]
-        await query.edit_message_text('لوحة تحكم البوت:', reply_markup=InlineKeyboardMarkup(keyboard))
+    # لا يوجد زر عودة للقائمة الرئيسية لأنها تعتمد على المجموعة
+    # elif data == 'main_menu': ...
     elif data == 'view_delete_replies':
         await view_delete_replies(update, context)
     elif data.startswith('delete_'):
@@ -189,15 +192,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == 'close_panel':
         await query.message.delete()
 
-# --- إعداد وتشغيل البوت ---
+# --- إعداد وتشغيل البوت (يبقى كما هو) ---
 def main() -> None:
-    """الدالة الرئيسية لتشغيل البوت."""
     if not TELEGRAM_TOKEN or not ADMIN_ID:
         logger.error("خطأ: متغيرات البيئة TELEGRAM_TOKEN و ADMIN_ID مطلوبة.")
         return
-        
     application = Application.builder().token(TELEGRAM_TOKEN).build()
-
     conv_handler = ConversationHandler(
         entry_points=[CallbackQueryHandler(add_reply_start, pattern='^add_reply_start$')],
         states={
@@ -207,26 +207,12 @@ def main() -> None:
         fallbacks=[CommandHandler('cancel', cancel_conversation)],
         per_message=False 
     )
-
     application.add_handler(conv_handler)
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.Regex(r'^يمان$'), show_control_panel))
     application.add_handler(CallbackQueryHandler(button_handler))
-    
-    # --- التعديل الرئيسي هنا ---
-    # 1. معالج تحميل الفيديو (يعمل فقط في المحادثات الخاصة)
-    application.add_handler(MessageHandler(
-        (filters.Entity("url") | filters.Entity("text_link")) & filters.ChatType.PRIVATE, 
-        handle_link
-    ))
-    
-    # 2. معالج الرسائل العام (يعمل في المجموعات والقنوات)
-    application.add_handler(MessageHandler(
-        filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS, 
-        process_group_message
-    ))
-    # --- نهاية التعديل ---
-
+    application.add_handler(MessageHandler((filters.Entity("url") | filters.Entity("text_link")) & filters.ChatType.PRIVATE, handle_link))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS, process_group_message))
     logger.info("Bot is starting...")
     application.run_polling()
 
