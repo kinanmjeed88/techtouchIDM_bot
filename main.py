@@ -16,18 +16,12 @@ from database import (
 )
 from analysis import analyze_sentiment_hf
 
-# إعداد نظام التسجيل (Logging)
+# ... (الكود من إعدادات logging إلى نهاية track_chats يبقى كما هو) ...
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-# قراءة المتغيرات الحساسة
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
 ADMIN_ID = os.environ.get('ADMIN_ID')
-
-# مراحل المحادثة
 KEYWORD, REPLY_TEXT = range(2)
-
-# --- الوظائف الأساسية للبوت ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text('بوت عمل احصائية')
@@ -88,15 +82,34 @@ async def track_chats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             logger.info(f"Bot was removed from group '{chat.title}' ({chat.id})")
             remove_group(str(chat.id))
 
+# --- دالة التشخيص ---
 async def register_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     chat = update.effective_chat
-    if str(user.id) != str(ADMIN_ID):
-        await update.message.reply_text("هذا الأمر مخصص للأدمن فقط.")
+
+    # --- بداية كود التشخيص ---
+    user_id_from_telegram = str(user.id)
+    admin_id_from_env = str(ADMIN_ID) # str() للتعامل مع حالة None
+
+    # رسالة تشخيصية نرسلها إلى المجموعة
+    debug_message = (
+        f"--- تشخيص الأدمن ---\n"
+        f"ID من تليجرام: `{user_id_from_telegram}` (الطول: {len(user_id_from_telegram)})\n"
+        f"ID من Railway: `{admin_id_from_env}` (الطول: {len(admin_id_from_env)})\n"
+        f"هل هما متطابقان؟ {'نعم' if user_id_from_telegram == admin_id_from_env else 'لا'}"
+    )
+    await update.message.reply_text(debug_message, parse_mode='Markdown')
+    # --- نهاية كود التشخيص ---
+
+    if user_id_from_telegram != admin_id_from_env:
+        # سنحتفظ بالرسالة القديمة للتأكيد
+        await update.message.reply_text("هذا الأمر مخصص للأدمن فقط. (فشل التحقق)")
         return
+    
     if chat.type not in [Chat.GROUP, Chat.SUPERGROUP]:
         await update.message.reply_text("هذا الأمر يجب استخدامه داخل مجموعة.")
         return
+        
     try:
         add_or_update_group(str(chat.id), chat.title)
         await update.message.reply_text(f"✅ تم تسجيل المجموعة '{chat.title}' بنجاح!")
@@ -105,6 +118,7 @@ async def register_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"حدث خطأ أثناء التسجيل: {e}")
         logger.error(f"Failed to manually register group {chat.id}: {e}")
 
+# ... (باقي الكود يبقى كما هو تمامًا) ...
 async def show_control_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if str(user.id) != str(ADMIN_ID): return
@@ -268,12 +282,7 @@ def main() -> None:
 
     application.add_handler(conv_handler)
     application.add_handler(CommandHandler("start", start))
-    
-    # --- التعديل هنا ---
-    # استخدام MessageHandler بدلاً من CommandHandler للاستجابة لكلمة "تسجيل"
     application.add_handler(MessageHandler(filters.Regex(r'^تسجيل$'), register_group))
-    # --- نهاية التعديل ---
-
     application.add_handler(MessageHandler(filters.Regex(r'^يمان$'), show_control_panel))
     application.add_handler(CallbackQueryHandler(button_handler))
     application.add_handler(MessageReactionHandler(handle_reaction))
