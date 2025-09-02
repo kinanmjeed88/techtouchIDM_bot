@@ -33,15 +33,10 @@ ADMIN_ID = int(os.environ.get('ADMIN_ID'))
 
 # مراحل المحادثة
 (
-    # مراحل الإضافة مع التقييد
     ADD_BANNED_WORD, ADD_BANNED_LINK, SET_MUTE_DURATION,
-    # مراحل الإضافة بدون تقييد
     ADD_WHITELISTED_LINK,
-    # مراحل الرد التلقائي
     ADD_AUTO_REPLY_KEYWORD, ADD_AUTO_REPLY_TEXT,
-    # مراحل الإعدادات
     SET_WELCOME_MESSAGE, SET_WARNING_MESSAGE, SET_AUTO_REPLY_PRIVATE,
-    # مراحل البث
     BROADCAST_MESSAGE, BROADCAST_CONFIRM
 ) = range(11)
 
@@ -53,7 +48,6 @@ def escape_markdown_v2(text: str) -> str:
     return re.sub(f'([{re.escape(escape_chars)}])', r'\\\1', text)
 
 async def reply_or_edit(update: Update, text: str, reply_markup=None):
-    """يرسل أو يعدل رسالة مع معالجة أخطاء الماركداون."""
     try:
         if update.callback_query:
             await update.callback_query.edit_message_text(text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN_V2)
@@ -77,8 +71,13 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # --- معالجات الرسائل ---
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # ... (الكود الخاص بمعالجة الرسائل يبقى كما هو - للاختصار)
-    pass
+    # هذا مجرد مثال مختصر، يجب استخدام الكود الكامل من نسختك
+    user = update.effective_user
+    if not user or not update.message or not update.message.text:
+        return
+    add_or_update_user(user.id, user.full_name, user.username)
+    increment_user_message_count(user.id)
+    # ... بقية منطق معالجة الرسائل
 
 # --- لوحة تحكم الأدمن ---
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -102,7 +101,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     data = query.data
 
-    # القوائم الرئيسية
     if data == "menu_main": await admin_panel(update, context)
     elif data == "close_panel": await query.message.delete()
     elif data == "menu_banning": await show_banning_menu(update, context)
@@ -110,13 +108,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "menu_broadcast": await show_broadcast_menu(update, context)
     elif data == "menu_reports": await show_reports_menu(update, context)
     elif data == "menu_settings": await show_settings_menu(update, context)
-
-    # قوائم إدارة الحظر
-    elif data == "list_banned_words": await manage_list_menu(update, context, "الكلمات المحظورة", BannedWord, "word", "add_banned_word", "delete_banned_word", "menu_banning")
-    elif data == "list_banned_links": await manage_list_menu(update, context, "الروابط المحظورة", BannedLink, "link_pattern", "add_banned_link", "delete_banned_link", "menu_banning")
-    elif data == "list_whitelisted_links": await manage_list_menu(update, context, "الروابط المسموحة", WhitelistedLink, "link_prefix", "add_whitelisted_link", "delete_whitelisted_link", "menu_banning")
-
-    # قوائم الحذف
+    elif data == "list_banned_words": await manage_list_menu(update, context, "الكلمات المحظورة", BannedWord, "word", "add_banned_word", "delete_bannedword", "menu_banning")
+    elif data == "list_banned_links": await manage_list_menu(update, context, "الروابط المحظورة", BannedLink, "link_pattern", "add_banned_link", "delete_bannedlink", "menu_banning")
+    elif data == "list_whitelisted_links": await manage_list_menu(update, context, "الروابط المسموحة", WhitelistedLink, "link_prefix", "add_whitelisted_link", "delete_whitelistedlink", "menu_banning")
     elif data.startswith("delete_"):
         parts = data.split("_", 2)
         action, model_name, item_value = parts
@@ -126,15 +120,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         column = columns[model_name]
         if db_delete_item(item_value, model, column):
             await query.answer("تم الحذف بنجاح!", show_alert=True)
-            # أعد تحميل القائمة بعد الحذف
-            await admin_panel(update, context) # العودة للقائمة الرئيسية كحل بسيط
+            await show_banning_menu(update, context)
         else:
             await query.answer("فشل الحذف.", show_alert=True)
-
-    # تقارير
     elif data == "top_active_users_report": await show_top_users_report(query)
     elif data == "check_blocked": await query.answer(f"عدد المستخدمين المحظورين: {get_blocked_user_count()}", show_alert=True)
-
 
 # --- دوال عرض القوائم ---
 async def show_banning_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -147,7 +137,6 @@ async def show_banning_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await reply_or_edit(update, "إدارة الحظر:", InlineKeyboardMarkup(keyboard))
 
 async def show_auto_replies_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # ... (يمكنك إكمال هذه الدوال بنفس الطريقة)
     await reply_or_edit(update, "هذه الميزة قيد الإنشاء.")
 
 async def show_broadcast_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -174,8 +163,6 @@ async def show_settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE)
     ]
     await reply_or_edit(update, "إعدادات أخرى:", InlineKeyboardMarkup(keyboard))
 
-
-# --- دوال إدارة القوائم (عرض، إضافة، حذف) ---
 async def manage_list_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, title: str, model, column: str, add_cb: str, del_cb_prefix: str, back_cb: str):
     items = db_get_all_items(model)
     text = f"*{escape_markdown_v2(title)}:*\n\n"
@@ -184,14 +171,12 @@ async def manage_list_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, t
         for item in items:
             value = getattr(item, column)
             text += f"\\- `{escape_markdown_v2(value)}`\n"
-            # زر حذف لكل عنصر
-            del_keyboard.append([InlineKeyboardButton(f"🗑️ {value[:20]}", callback_data=f"{del_cb_prefix}_{model.__name__.lower()}_{value}")])
+            del_keyboard.append([InlineKeyboardButton(f"🗑️ {value[:20]}", callback_data=f"{del_cb_prefix}_{value}")])
     else:
         text += "القائمة فارغة\\."
-
     keyboard = [
         [InlineKeyboardButton("➕ إضافة عنصر جديد", callback_data=add_cb)],
-        *del_keyboard, # إضافة أزرار الحذف
+        *del_keyboard,
         [InlineKeyboardButton("⬅️ عودة", callback_data=back_cb)]
     ]
     await reply_or_edit(update, text, InlineKeyboardMarkup(keyboard))
@@ -207,18 +192,17 @@ async def show_top_users_report(query: Update.callback_query):
         report_text += "لا يوجد مستخدمون متفاعلون بعد\\."
     await reply_or_edit(query, report_text)
 
-
-# --- معالج المحادثات (لإضافة العناصر والإعدادات) ---
-async def add_item_start(update: Update, context: ContextTypes.DEFAULT_TYPE, item_type: str, next_state):
-    """يبدأ عملية إضافة عنصر جديد."""
+# --- معالج المحادثات ---
+async def add_item_start(update: Update, context: ContextTypes.DEFAULT_TYPE, item_type: str, next_state: int, setting_key: str = None):
     query = update.callback_query
     await query.answer()
     context.user_data['item_type'] = item_type
-    await query.edit_message_text(f"أرسل الآن *{item_type}* الذي تريد إضافته.", parse_mode=ParseMode.MARKDOWN)
+    if setting_key:
+        context.user_data['setting_key'] = setting_key
+    await query.edit_message_text(f"أرسل الآن *{item_type}* الذي تريد إضافته/تعديله.", parse_mode=ParseMode.MARKDOWN)
     return next_state
 
 async def add_banned_item_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """يستقبل الكلمة/الرابط المحظور ويسأل عن مدة التقييد."""
     item_value = update.message.text
     context.user_data['item_value'] = item_value
     keyboard = [
@@ -231,28 +215,22 @@ async def add_banned_item_received(update: Update, context: ContextTypes.DEFAULT
     return SET_MUTE_DURATION
 
 async def set_mute_duration(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """يحفظ العنصر مع مدة التقييد."""
     query = update.callback_query
     await query.answer()
     mute_duration = query.data.split('_')[1]
     if mute_duration == 'none': mute_duration = None
-
     item_type = context.user_data['item_type']
     item_value = context.user_data['item_value']
-    
     model = BannedWord if item_type == "كلمة محظورة" else BannedLink
     column = "word" if item_type == "كلمة محظورة" else "link_pattern"
-
     if db_add_item({column: item_value, 'mute_duration': mute_duration}, model, column):
         await query.edit_message_text(f"✅ تم حفظ '{item_value}' بنجاح.")
     else:
         await query.edit_message_text(f"⚠️ فشل حفظ '{item_value}'. قد يكون موجوداً بالفعل.")
-    
     context.user_data.clear()
     return ConversationHandler.END
 
 async def add_whitelisted_link_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """يحفظ الرابط المسموح به."""
     link_prefix = update.message.text
     if db_add_item({'link_prefix': link_prefix}, WhitelistedLink, 'link_prefix'):
         await update.message.reply_text(f"✅ تم حفظ البادئة '{link_prefix}' كرابط مسموح به.")
@@ -261,7 +239,6 @@ async def add_whitelisted_link_received(update: Update, context: ContextTypes.DE
     return ConversationHandler.END
 
 async def set_setting_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """يحفظ قيمة الإعدادات (رسالة ترحيب، تنبيه، الخ)."""
     setting_key = context.user_data['setting_key']
     new_value = update.message.text
     set_setting(setting_key, new_value)
@@ -270,11 +247,13 @@ async def set_setting_received(update: Update, context: ContextTypes.DEFAULT_TYP
     return ConversationHandler.END
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """يلغي المحادثة الحالية."""
-    await update.message.reply_text("تم إلغاء العملية.")
+    if update.callback_query:
+        await update.callback_query.answer()
+        await update.callback_query.edit_message_text("تم إلغاء العملية.")
+    else:
+        await update.message.reply_text("تم إلغاء العملية.")
     context.user_data.clear()
     return ConversationHandler.END
-
 
 # --- الدالة الرئيسية ---
 def main():
@@ -285,33 +264,32 @@ def main():
     init_db()
     application = Application.builder().token(TELEGRAM_TOKEN).build()
 
-    # --- معالج المحادثات الكامل ---
     conv_handler = ConversationHandler(
         entry_points=[
             CallbackQueryHandler(lambda u, c: add_item_start(u, c, "كلمة محظورة", ADD_BANNED_WORD), pattern="^add_banned_word$"),
             CallbackQueryHandler(lambda u, c: add_item_start(u, c, "رابط محظور", ADD_BANNED_LINK), pattern="^add_banned_link$"),
             CallbackQueryHandler(lambda u, c: add_item_start(u, c, "رابط مسموح", ADD_WHITELISTED_LINK), pattern="^add_whitelisted_link$"),
-            CallbackQueryHandler(lambda u, c: add_item_start(u, c, "رسالة الترحيب", SET_WELCOME_MESSAGE), pattern="^set_welcome_start$"),
-            CallbackQuery_handler(lambda u, c: add_item_start(u, c, "رسالة التنبيه", SET_WARNING_MESSAGE), pattern="^set_warning_start$"),
+            CallbackQueryHandler(lambda u, c: add_item_start(u, c, "رسالة الترحيب", SET_WELCOME_MESSAGE, 'welcome_message'), pattern="^set_welcome_start$"),
+            # [FIX] تم تصحيح الخطأ الإملائي هنا
+            CallbackQueryHandler(lambda u, c: add_item_start(u, c, "رسالة التنبيه", SET_WARNING_MESSAGE, 'warning_message'), pattern="^set_warning_start$"),
         ],
         states={
             ADD_BANNED_WORD: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_banned_item_received)],
             ADD_BANNED_LINK: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_banned_item_received)],
             SET_MUTE_DURATION: [CallbackQueryHandler(set_mute_duration, pattern="^mute_")],
             ADD_WHITELISTED_LINK: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_whitelisted_link_received)],
-            SET_WELCOME_MESSAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, lambda u, c: set_setting_received(u, c, 'welcome_message'))],
-            SET_WARNING_MESSAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, lambda u, c: set_setting_received(u, c, 'warning_message'))],
+            SET_WELCOME_MESSAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, set_setting_received)],
+            SET_WARNING_MESSAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, set_setting_received)],
         },
-        fallbacks=[CommandHandler('cancel', cancel)],
+        fallbacks=[CommandHandler('cancel', cancel), CallbackQueryHandler(cancel, pattern="^cancel$")],
         conversation_timeout=300
     )
 
-    # --- إضافة المعالجات ---
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(MessageHandler(filters.Regex(r'^يمان$') & filters.User(user_id=ADMIN_ID), admin_panel))
     application.add_handler(conv_handler)
     application.add_handler(CallbackQueryHandler(button_handler))
-    # application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
 
     logger.info("Bot is starting...")
     application.run_polling()
