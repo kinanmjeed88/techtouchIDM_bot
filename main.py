@@ -12,7 +12,7 @@ import yt_dlp
 from database import (
     save_message, SessionLocal, Message, add_or_update_group, add_or_update_reply,
     get_all_replies, delete_reply, update_message_reactions, get_top_reacted_messages,
-    remove_group, get_all_managed_groups
+    remove_group, get_all_managed_groups, save_private_message
 )
 from analysis import analyze_sentiment_hf
 
@@ -36,43 +36,35 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = update.message.text
     sent_message = await update.message.reply_text('جاري معالجة الرابط، يرجى الانتظار...')
     
-    # إنشاء اسم ملف فريد وقصير باستخدام timestamp لحل مشكلة "File name too long"
     output_filename = f"download_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
     
     ydl_opts = {
         'format': 'best',
-        'outtmpl': output_filename, # استخدام اسم الملف المخصص
+        'outtmpl': output_filename,
         'noplaylist': True,
-        'ignoreerrors': True, # تجاهل الأخطاء ومحاولة المتابعة
-        'source_address': '0.0.0.0' # محاولة تجنب حظر IP (قد لا تعمل دائمًا)
+        'ignoreerrors': True,
+        'source_address': '0.0.0.0'
     }
     
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
             
-            # التحقق من وجود الملف قبل إرساله
             if os.path.exists(output_filename):
                 video_title = info.get('title', 'Video')
                 await update.message.reply_document(document=open(output_filename, 'rb'), caption=video_title)
                 os.remove(output_filename)
                 await sent_message.delete()
             else:
-                # هذا يحدث إذا فشل التحميل بصمت بسبب ignoreerrors
-                logger.error(f"Download of {url} completed but file '{output_filename}' not found.")
                 await sent_message.edit_text('عذراً، لم يتم العثور على الفيديو بعد اكتمال العملية. قد يكون المحتوى محميًا.')
 
     except Exception as e:
         logger.error(f"Error downloading {url}: {e}")
-        # عرض رسالة خطأ أكثر وضوحًا للمستخدم
         error_message = str(e)
         if '403: Forbidden' in error_message:
             await sent_message.edit_text('عذراً، هذا المحتوى محمي ولا يمكن تحميله (خطأ 403).')
-        elif 'File name too long' in error_message:
-             await sent_message.edit_text('عذراً، عنوان الفيديو طويل جداً ولا يمكن حفظه.')
         else:
             await sent_message.edit_text('حدث خطأ أثناء التحميل. قد يكون المحتوى خاصاً أو غير مدعوم.')
-
 
 async def process_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.effective_message
@@ -84,7 +76,6 @@ async def process_group_message(update: Update, context: ContextTypes.DEFAULT_TY
         message_id = message.message_id
         sentiment = analyze_sentiment_hf(message.text)
         save_message(str(message_id), str(user_id), str(group_id), message.text, sentiment)
-        logger.info(f"SUCCESS: Saved message {message_id} from group {group_id}")
     except Exception as e:
         logger.error(f"ERROR: Failed to save message {message.message_id}. Reason: {e}", exc_info=True)
     try:
@@ -107,7 +98,6 @@ async def handle_reaction(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if hasattr(r, 'emoji') and r.emoji in positive_emojis:
                 positive_count += 1
     update_message_reactions(str(message_id), positive_count)
-    logger.info(f"Updated reactions for message {message_id}. New positive count: {positive_count}")
 
 async def track_chats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     result = update.chat_member
@@ -116,10 +106,8 @@ async def track_chats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     new_member_status = result.new_chat_member.status
     if result.new_chat_member.user.id == context.bot.id:
         if new_member_status == "member":
-            logger.info(f"Bot was added to group '{chat.title}' ({chat.id})")
             add_or_update_group(str(chat.id), chat.title)
         elif new_member_status in ["left", "kicked"]:
-            logger.info(f"Bot was removed from group '{chat.title}' ({chat.id})")
             remove_group(str(chat.id))
 
 async def register_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -130,10 +118,8 @@ async def register_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         add_or_update_group(str(chat.id), chat.title)
         await update.message.reply_text(f"✅ تم تسجيل المجموعة '{chat.title}' بنجاح!")
-        logger.info(f"Group '{chat.title}' ({chat.id}) was manually registered by admin.")
     except Exception as e:
         await update.message.reply_text(f"حدث خطأ أثناء التسجيل: {e}")
-        logger.error(f"Failed to manually register group {chat.id}: {e}")
 
 async def show_control_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -148,6 +134,46 @@ async def show_control_panel(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if update.message.chat.type != Chat.PRIVATE:
         await update.message.reply_text("تم إرسال لوحة التحكم إليك في الخاص.", reply_to_message_id=update.message.message_id)
     await context.bot.send_message(chat_id=user.id, text='لوحة التحكم الرئيسية:', reply_markup=reply_markup)
+
+async def broadcast_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if str(user.id) != str(ADMIN_ID): return
+    message_to_broadcast = " ".join(context.args)
+    if not message_to_broadcast:
+        await update.message.reply_text("الرجاء كتابة الرسالة بعد الأمر.\nمثال: /broadcast مرحبًا بالجميع!")
+        return
+    groups = get_all_managed_groups()
+    if not groups:
+        await update.message.reply_text("لا توجد مجموعات مسجلة لبث الرسالة إليها.")
+        return
+    sent_count, failed_count = 0, 0
+    await update.message.reply_text(f"بدء بث الرسالة إلى {len(groups)} مجموعة...")
+    for group in groups:
+        try:
+            await context.bot.send_message(chat_id=group.group_id, text=message_to_broadcast)
+            sent_count += 1
+        except Exception as e:
+            logger.error(f"Failed to send broadcast to group {group.group_id}: {e}")
+            failed_count += 1
+    await update.message.reply_text(f"✅ اكتمل البث!\n- تم الإرسال بنجاح إلى: {sent_count} مجموعة.\n- فشل الإرسال إلى: {failed_count} مجموعة.")
+
+async def handle_private_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    message = update.effective_message
+    if str(user.id) == str(ADMIN_ID) and message.reply_to_message and message.reply_to_message.forward_from:
+        original_user_id = message.reply_to_message.forward_from.id
+        try:
+            await context.bot.send_message(chat_id=original_user_id, text=message.text)
+            await message.reply_text("✅ تم إرسال ردك بنجاح.")
+        except Exception as e:
+            await message.reply_text(f"لم يتمكن من إرسال الرد. الخطأ: {e}")
+        return
+    if str(user.id) != str(ADMIN_ID):
+        save_private_message(str(user.id), message.text)
+        try:
+            await context.bot.forward_message(chat_id=ADMIN_ID, from_chat_id=user.id, message_id=message.message_id)
+        except Exception as e:
+            logger.error(f"Could not forward message from {user.id} to admin. Reason: {e}")
 
 async def add_reply_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -196,9 +222,7 @@ async def view_delete_replies(update: Update, context: ContextTypes.DEFAULT_TYPE
     if not replies:
         await query.edit_message_text("لا توجد ردود محفوظة.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ عودة", callback_data='manage_replies')]]))
         return
-    keyboard = []
-    for reply in replies:
-        keyboard.append([InlineKeyboardButton(f"🗑️ {reply.keyword}", callback_data=f"delete_{reply.keyword}")])
+    keyboard = [[InlineKeyboardButton(f"🗑️ {reply.keyword}", callback_data=f"delete_{reply.keyword}")] for reply in replies]
     keyboard.append([InlineKeyboardButton("⬅️ عودة", callback_data='manage_replies')])
     reply_markup = InlineKeyboardMarkup(keyboard)
     await query.edit_message_text("اضغط على أي رد لحذفه:", reply_markup=reply_markup)
@@ -207,18 +231,15 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     data = query.data
-    if data == 'select_group_for_report' or data == 'select_group_for_top_comments':
+    if data in ['select_group_for_report', 'select_group_for_top_comments']:
         groups = get_all_managed_groups()
         if not groups:
             await query.edit_message_text("البوت لا يتواجد في أي مجموعات.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ عودة", callback_data='main_menu_private')]]))
             return
-        keyboard = []
         request_type = 'get_analysis_report_' if data == 'select_group_for_report' else 'get_top_comments_'
-        for group in groups:
-            keyboard.append([InlineKeyboardButton(group.group_title, callback_data=f'{request_type}{group.group_id}')])
+        keyboard = [[InlineKeyboardButton(group.group_title, callback_data=f'{request_type}{group.group_id}')] for group in groups]
         keyboard.append([InlineKeyboardButton("⬅️ عودة", callback_data='main_menu_private')])
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text("اختر مجموعة:", reply_markup=reply_markup)
+        await query.edit_message_text("اختر مجموعة:", reply_markup=InlineKeyboardMarkup(keyboard))
 
     elif data.startswith('get_analysis_report_'):
         group_id = data.replace('get_analysis_report_', '')
@@ -234,9 +255,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             positive_count = sum(1 for m in messages if m.sentiment == 'positive')
             negative_count = sum(1 for m in messages if m.sentiment == 'negative')
             neutral_count = total_messages - positive_count - negative_count
-            positive_percent = (positive_count / total_messages) * 100 if total_messages > 0 else 0
-            negative_percent = (negative_count / total_messages) * 100 if total_messages > 0 else 0
-            neutral_percent = (neutral_count / total_messages) * 100 if total_messages > 0 else 0
+            positive_percent = (positive_count / total_messages) * 100
+            negative_percent = (negative_count / total_messages) * 100
+            neutral_percent = (neutral_count / total_messages) * 100
             report = (f"📊 **تقرير تحليل المشاعر**\n\n"
                       f"▪️ **إجمالي التعليقات:** {total_messages}\n"
                       f"💚 **إيجابي:** {positive_percent:.1f}%\n"
@@ -269,8 +290,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("💬 إدارة الردود التلقائية", callback_data='manage_replies')],
             [InlineKeyboardButton("❌ إغلاق", callback_data='close_panel')],
         ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text('لوحة التحكم الرئيسية:', reply_markup=reply_markup)
+        await query.edit_message_text('لوحة التحكم الرئيسية:', reply_markup=InlineKeyboardMarkup(keyboard))
     
     elif data == 'view_delete_replies':
         await view_delete_replies(update, context)
@@ -302,14 +322,18 @@ def main() -> None:
         fallbacks=[CommandHandler('cancel', cancel_conversation)],
         per_message=False 
     )
+    
+    # ترتيب المعالجات مهم جدًا
     application.add_handler(conv_handler)
     application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("broadcast", broadcast_message))
     application.add_handler(MessageHandler(filters.Regex(r'^تسجيل$'), register_group))
     application.add_handler(MessageHandler(filters.Regex(r'^يمان$'), show_control_panel))
     application.add_handler(CallbackQueryHandler(button_handler))
     application.add_handler(MessageReactionHandler(handle_reaction))
     application.add_handler(ChatMemberHandler(track_chats, ChatMemberHandler.MY_CHAT_MEMBER))
     application.add_handler(MessageHandler((filters.Entity("url") | filters.Entity("text_link")) & filters.ChatType.PRIVATE, handle_link))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, handle_private_message))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & (filters.ChatType.GROUPS | filters.REPLY), process_group_message))
 
     logger.info("Bot is starting...")
