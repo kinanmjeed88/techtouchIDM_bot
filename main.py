@@ -17,7 +17,6 @@ from database import (
 from analysis import analyze_sentiment_hf
 
 # إعداد نظام التسجيل (Logging)
-# تغيير المستوى إلى DEBUG لرؤية كل شيء
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
@@ -28,49 +27,7 @@ ADMIN_ID = os.environ.get('ADMIN_ID')
 # مراحل المحادثة
 KEYWORD, REPLY_TEXT = range(2)
 
-# --- دالة التشخيص الرئيسية ---
-async def process_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """يعالج الرسائل النصية في المجموعات مع تسجيل مفصل."""
-    logger.debug("--- [CHECKPOINT 1] process_group_message called ---")
-    message = update.message
-    
-    if not message or not message.text or message.text.startswith('/'):
-        logger.debug("[CHECKPOINT 2] Message ignored (not text or is a command).")
-        return
-
-    logger.debug(f"[CHECKPOINT 2] Message passed initial filter. Text: '{message.text}'")
-
-    try:
-        user_id = message.from_user.id
-        group_id = message.chat.id
-        message_id = message.message_id
-        
-        logger.debug("[CHECKPOINT 3] Analyzing sentiment...")
-        sentiment = analyze_sentiment_hf(message.text)
-        logger.debug(f"Sentiment is '{sentiment}'. Preparing to save.")
-
-        save_message(str(message_id), str(user_id), str(group_id), message.text, sentiment)
-        
-        logger.info(f"--- [SUCCESS] Saved message {message_id} from user {user_id} in group {group_id} ---")
-
-    except Exception as e:
-        logger.error(f"--- [ERROR] FAILED TO SAVE MESSAGE. Reason: {e} ---", exc_info=True)
-        # exc_info=True سيطبع الخطأ الكامل
-
-    # التحقق من الرد التلقائي (يحدث بغض النظر عن نجاح الحفظ)
-    try:
-        all_replies = get_all_replies()
-        message_lower = message.text.lower()
-        for reply in all_replies:
-            if reply.keyword.lower() in message_lower:
-                logger.debug(f"Found auto-reply for keyword '{reply.keyword}'.")
-                await message.reply_text(reply.reply_text)
-                break
-    except Exception as e:
-        logger.error(f"--- [ERROR] FAILED TO PROCESS AUTO-REPLY. Reason: {e} ---")
-
-# --- باقي الكود يبقى كما هو ---
-# (لقد نسخت لك الكود بالكامل أدناه للتأكد من عدم وجود أخطاء)
+# --- الوظائف الأساسية للبوت ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text('بوت عمل احصائية')
@@ -89,6 +46,35 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Error downloading {url}: {e}")
         await sent_message.edit_text(f'حدث خطأ أثناء التحميل: {e}')
+
+async def process_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.debug("--- [CHECKPOINT 1] process_group_message called ---")
+    message = update.message
+    if not message or not message.text or message.text.startswith('/'):
+        logger.debug("[CHECKPOINT 2] Message ignored (not text or is a command).")
+        return
+    logger.debug(f"[CHECKPOINT 2] Message passed initial filter. Text: '{message.text}'")
+    try:
+        user_id = message.from_user.id
+        group_id = message.chat.id
+        message_id = message.message_id
+        logger.debug("[CHECKPOINT 3] Analyzing sentiment...")
+        sentiment = analyze_sentiment_hf(message.text)
+        logger.debug(f"Sentiment is '{sentiment}'. Preparing to save.")
+        save_message(str(message_id), str(user_id), str(group_id), message.text, sentiment)
+        logger.info(f"--- [SUCCESS] Saved message {message_id} from user {user_id} in group {group_id} ---")
+    except Exception as e:
+        logger.error(f"--- [ERROR] FAILED TO SAVE MESSAGE. Reason: {e} ---", exc_info=True)
+    try:
+        all_replies = get_all_replies()
+        message_lower = message.text.lower()
+        for reply in all_replies:
+            if reply.keyword.lower() in message_lower:
+                logger.debug(f"Found auto-reply for keyword '{reply.keyword}'.")
+                await message.reply_text(reply.reply_text)
+                break
+    except Exception as e:
+        logger.error(f"--- [ERROR] FAILED TO PROCESS AUTO-REPLY. Reason: {e} ---")
 
 async def handle_reaction(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reaction = update.message_reaction
@@ -118,10 +104,8 @@ async def track_chats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 async def register_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     chat = update.effective_chat
-    if str(user.id) != str(ADMIN_ID):
-        return
-    if chat.type not in [Chat.GROUP, Chat.SUPERGROUP]:
-        return
+    if str(user.id) != str(ADMIN_ID): return
+    if chat.type not in [Chat.GROUP, Chat.SUPERGROUP]: return
     try:
         add_or_update_group(str(chat.id), chat.title)
         await update.message.reply_text(f"✅ تم تسجيل المجموعة '{chat.title}' بنجاح!")
@@ -147,7 +131,7 @@ async def show_control_panel(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def add_reply_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    await query.edit_message_text("تمام. أرسل الآن **الكلمة المفتاحية** التي تريد أن يرد عليها البوت.", parse_mode='Markdown')
+    await query.edit_message_text("تمام. أرسل الآن **الكلمة المفتاحية**.", parse_mode='Markdown')
     return KEYWORD
 
 async def get_keyword(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -159,7 +143,7 @@ async def get_reply_text_and_save(update: Update, context: ContextTypes.DEFAULT_
     keyword = context.user_data['keyword']
     reply_text = update.message.text
     add_or_update_reply(keyword, reply_text)
-    await update.message.reply_text(f"✅ تم الحفظ بنجاح!\nالكلمة: {keyword}\nالرد: {reply_text}")
+    await update.message.reply_text(f"✅ تم الحفظ!\nالكلمة: {keyword}\nالرد: {reply_text}")
     context.user_data.clear()
     await show_replies_menu(update, context, from_conversation=True)
     return ConversationHandler.END
@@ -189,7 +173,7 @@ async def view_delete_replies(update: Update, context: ContextTypes.DEFAULT_TYPE
     await query.answer()
     replies = get_all_replies()
     if not replies:
-        await query.edit_message_text("لا توجد ردود تلقائية محفوظة حالياً.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ عودة", callback_data='manage_replies')]]))
+        await query.edit_message_text("لا توجد ردود محفوظة.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ عودة", callback_data='manage_replies')]]))
         return
     keyboard = []
     for reply in replies:
@@ -205,13 +189,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == 'select_group_for_report' or data == 'select_group_for_top_comments':
         groups = get_all_managed_groups()
         if not groups:
-            await query.edit_message_text("البوت لا يتواجد في أي مجموعات حالياً.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ عودة", callback_data='main_menu_private')]]))
+            await query.edit_message_text("البوت لا يتواجد في أي مجموعات.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ عودة", callback_data='main_menu_private')]]))
             return
         keyboard = []
         request_type = 'get_analysis_report_' if data == 'select_group_for_report' else 'get_top_comments_'
         for group in groups:
             keyboard.append([InlineKeyboardButton(group.group_title, callback_data=f'{request_type}{group.group_id}')])
-        keyboard.append([InlineKeyboardButton("⬅️ عودة للقائمة الرئيسية", callback_data='main_menu_private')])
+        keyboard.append([InlineKeyboardButton("⬅️ عودة", callback_data='main_menu_private')])
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text("اختر مجموعة:", reply_markup=reply_markup)
     elif data.startswith('get_analysis_report_'):
@@ -223,7 +207,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             messages = db.query(Message).filter(Message.group_id == group_id, Message.timestamp >= seven_days_ago).all()
             total_messages = len(messages)
             if total_messages == 0:
-                await query.edit_message_text("لا توجد رسائل لتحليلها في هذه المجموعة خلال آخر 7 أيام.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ عودة", callback_data='select_group_for_report')]]))
+                await query.edit_message_text("لا توجد رسائل لتحليلها في هذه المجموعة.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ عودة", callback_data='select_group_for_report')]]))
                 return
             positive_count = sum(1 for m in messages if m.sentiment == 'positive')
             negative_count = sum(1 for m in messages if m.sentiment == 'negative')
@@ -231,7 +215,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             positive_percent = (positive_count / total_messages) * 100 if total_messages > 0 else 0
             negative_percent = (negative_count / total_messages) * 100 if total_messages > 0 else 0
             neutral_percent = (neutral_count / total_messages) * 100 if total_messages > 0 else 0
-            report = (f"📊 **تقرير تحليل المشاعر لآخر 7 أيام**\n\n"
+            report = (f"📊 **تقرير تحليل المشاعر**\n\n"
                       f"▪️ **إجمالي التعليقات:** {total_messages}\n"
                       f"💚 **إيجابي:** {positive_percent:.1f}%\n"
                       f"💔 **سلبي:** {negative_percent:.1f}%\n"
@@ -243,9 +227,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         group_id = data.split('_', 2)[2]
         await query.edit_message_text("جاري جلب أكثر التعليقات تفاعلاً...")
         top_messages = get_top_reacted_messages(group_id, limit=5)
-        report = "⭐ **أكثر التعليقات تفاعلاً في آخر 7 أيام**\n\n"
+        report = "⭐ **أكثر التعليقات تفاعلاً**\n\n"
         if not top_messages:
-            report += "_لا توجد تعليقات حظيت بتفاعلات إيجابية._"
+            report += "_لا توجد تعليقات حظيت بتفاعلات._"
         else:
             for i, msg in enumerate(top_messages):
                 short_text = (msg.text[:70] + '...') if len(msg.text) > 70 else msg.text
@@ -276,11 +260,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main() -> None:
     if not TELEGRAM_TOKEN or not ADMIN_ID:
-        logger.error("خطأ: متغيرات البيئة TELEGRAM_TOKEN و ADMIN_ID مطلوبة.")
+        logger.error("خطأ: متغيرات البيئة مطلوبة.")
         return
         
     application = Application.builder().token(TELEGRAM_TOKEN).build()
 
+    # --- إعادة ترتيب المعالجات ---
+    # 1. الأوامر المحددة (start, cancel)
     conv_handler = ConversationHandler(
         entry_points=[CallbackQueryHandler(add_reply_start, pattern='^add_reply_start$')],
         states={
@@ -290,16 +276,24 @@ def main() -> None:
         fallbacks=[CommandHandler('cancel', cancel_conversation)],
         per_message=False 
     )
-
     application.add_handler(conv_handler)
     application.add_handler(CommandHandler("start", start))
+
+    # 2. المعالجات الخاصة بالأدمن (تستخدم Regex)
     application.add_handler(MessageHandler(filters.Regex(r'^تسجيل$'), register_group))
     application.add_handler(MessageHandler(filters.Regex(r'^يمان$'), show_control_panel))
+
+    # 3. معالجات التحديثات الخاصة (ردود الفعل، الأزرار، دخول/خروج البوت)
     application.add_handler(CallbackQueryHandler(button_handler))
     application.add_handler(MessageReactionHandler(handle_reaction))
     application.add_handler(ChatMemberHandler(track_chats, ChatMemberHandler.MY_CHAT_MEMBER))
-    application.add_handler(MessageHandler((filters.Entity("url") | filters.Entity("text_link")) & filters.ChatType.PRIVATE, handle_link))
+
+    # 4. معالج الروابط في الخاص
+    application.add_handler(MessageHandler(filters.Entity("url") | filters.Entity("text_link") & filters.ChatType.PRIVATE, handle_link))
+    
+    # 5. المعالج العام للرسائل النصية في المجموعات (يوضع في النهاية)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS, process_group_message))
+    # --- نهاية إعادة الترتيب ---
 
     logger.info("Bot is starting...")
     application.run_polling()
