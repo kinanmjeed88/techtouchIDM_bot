@@ -3,3 +3,4 @@ yt-dlp
 psycopg2-binary
 sqlalchemy
 requests
+vaderSentiment-arabic
