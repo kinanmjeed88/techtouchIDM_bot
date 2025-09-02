@@ -94,50 +94,52 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     data = query.data
 
-    menu_map = {
-        "main_menu": admin_panel,
-        "manage_banning": lambda u, c: u.callback_query.edit_message_text("إدارة الحظر:", reply_markup=InlineKeyboardMarkup([
+    # القوائم الرئيسية
+    if data == "main_menu":
+        await admin_panel(update, context)
+    elif data == "close_panel":
+        await query.message.delete()
+    elif data == "manage_banning":
+        await query.edit_message_text("إدارة الحظر:", reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("📝 الكلمات المحظورة", callback_data="banned_words_menu")],
             [InlineKeyboardButton("🔗 الروابط المحظورة", callback_data="banned_links_menu")],
             [InlineKeyboardButton("✅ الروابط المسموحة", callback_data="whitelisted_links_menu")],
             [InlineKeyboardButton("⬅️ عودة", callback_data="main_menu")]
-        ])),
-        "manage_auto_replies": lambda u, c: u.callback_query.edit_message_text("إدارة الردود التلقائية:", reply_markup=InlineKeyboardMarkup([
+        ]))
+    elif data == "manage_auto_replies":
+        await query.edit_message_text("إدارة الردود التلقائية:", reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("➕ إضافة رد تلقائي", callback_data="add_auto_reply_start")],
             [InlineKeyboardButton("🗑️ حذف رد تلقائي", callback_data="delete_auto_reply_menu")],
             [InlineKeyboardButton("⬅️ عودة", callback_data="main_menu")]
-        ])),
-        "manage_broadcast": lambda u, c: u.callback_query.edit_message_text("إدارة البث:", reply_markup=InlineKeyboardMarkup([
+        ]))
+    elif data == "manage_broadcast":
+        await query.edit_message_text("إدارة البث:", reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("✍️ إرسال بث جديد", callback_data="broadcast_start")],
             [InlineKeyboardButton(f"👥 فحص المحظورين ({get_blocked_user_count()})", callback_data="check_blocked")],
             [InlineKeyboardButton("⬅️ عودة", callback_data="main_menu")]
-        ])),
-        "manage_reports": lambda u, c: u.callback_query.edit_message_text("تقارير التفاعل:", reply_markup=InlineKeyboardMarkup([
+        ]))
+    elif data == "manage_reports":
+        await query.edit_message_text("تقارير التفاعل:", reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("📈 أكثر 5 متفاعلين", callback_data="top_active_users_report")],
             [InlineKeyboardButton("⬅️ عودة", callback_data="main_menu")]
-        ])),
-        "manage_settings": lambda u, c: u.callback_query.edit_message_text("إعدادات أخرى:", reply_markup=InlineKeyboardMarkup([
+        ]))
+    elif data == "manage_settings":
+        await query.edit_message_text("إعدادات أخرى:", reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("🤖 تعديل الرد التلقائي للخاص", callback_data="set_auto_reply_start")],
             [InlineKeyboardButton("👋 تعديل رسالة الترحيب", callback_data="set_welcome_start")],
             [InlineKeyboardButton("⚠️ رسالة التنبيه عند الحظر", callback_data="set_warning_message_start")],
             [InlineKeyboardButton("⬅️ عودة", callback_data="main_menu")]
         ]))
-    }
-
-    if data in menu_map:
-        await menu_map[data](update, context)
-    elif data == "close_panel":
-        await query.message.delete()
-    elif data == "check_blocked":
-        await query.answer(f"عدد المستخدمين المحظورين: {get_blocked_user_count()}", show_alert=True)
-    elif data == "top_active_users_report":
-        await show_top_users_report(query)
+    
+    # [FIX] إضافة الشروط المفقودة للتعامل مع أزرار قائمة الحظر
     elif data == "banned_words_menu":
         await manage_list_menu(update, context, "الكلمات المحظورة", BannedWord, "word", "add_banned_word_start", "delete_banned_word_menu", "manage_banning")
     elif data == "banned_links_menu":
         await manage_list_menu(update, context, "الروابط المحظورة", BannedLink, "link_pattern", "add_banned_link_start", "delete_banned_link_menu", "manage_banning")
     elif data == "whitelisted_links_menu":
         await manage_list_menu(update, context, "الروابط المسموحة", WhitelistedLink, "link_prefix", "add_whitelisted_link_start", "delete_whitelisted_link_menu", "manage_banning")
+
+    # التعامل مع الحذف
     elif data == "delete_banned_word_menu":
         await confirm_delete_item(update, context, "كلمة محظورة", BannedWord, "word", "banned_words_menu")
     elif data.startswith("delete_item_"):
@@ -146,9 +148,21 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         columns = {"bannedword": "word", "bannedlink": "link_pattern", "whitelistedlink": "link_prefix"}
         if db_delete_item(item_value, models[model_name], columns[model_name]):
             await query.answer("تم الحذف بنجاح!", show_alert=True)
-            await menu_map["manage_banning"](update, context)
+            # أعد تحميل القائمة الرئيسية للحظر بعد الحذف
+            await query.edit_message_text("إدارة الحظر:", reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("📝 الكلمات المحظورة", callback_data="banned_words_menu")],
+                [InlineKeyboardButton("🔗 الروابط المحظورة", callback_data="banned_links_menu")],
+                [InlineKeyboardButton("✅ الروابط المسموحة", callback_data="whitelisted_links_menu")],
+                [InlineKeyboardButton("⬅️ عودة", callback_data="main_menu")]
+            ]))
         else:
             await query.answer("فشل الحذف.", show_alert=True)
+
+    # التعامل مع التقارير
+    elif data == "top_active_users_report":
+        await show_top_users_report(query)
+    elif data == "check_blocked":
+        await query.answer(f"عدد المستخدمين المحظورين: {get_blocked_user_count()}", show_alert=True)
 
 async def show_top_users_report(query: Update.callback_query):
     top_users = get_top_active_users()
@@ -162,6 +176,7 @@ async def show_top_users_report(query: Update.callback_query):
     await query.edit_message_text(report_text, parse_mode=ParseMode.MARKDOWN_V2)
 
 async def manage_list_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, title: str, model, column_name: str, add_cb: str, del_cb: str, back_cb: str):
+    query = update.callback_query
     items = db_get_all_items(model)
     text = f"*{escape_markdown_v2(title)}:*\n\n"
     if items:
@@ -181,6 +196,7 @@ async def manage_list_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, t
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN_V2)
 
 async def confirm_delete_item(update: Update, context: ContextTypes.DEFAULT_TYPE, title: str, model, column: str, back_cb: str):
+    query = update.callback_query
     items = db_get_all_items(model)
     keyboard = []
     if items:
@@ -250,11 +266,8 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if query:
         await query.answer()
-        await query.edit_message_text("تم إلغاء العملية.")
-    else:
-        await update.message.reply_text("تم إلغاء العملية.")
     context.user_data.clear()
-    await admin_panel(update, context)
+    await admin_panel(update, context) # العودة للوحة التحكم الرئيسية
     return ConversationHandler.END
 
 # --- الدالة الرئيسية ---
@@ -293,7 +306,7 @@ def main():
     application.add_handler(CallbackQueryHandler(button_handler))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
 
-    logger.info("Bot is starting with original structure and fixed handlers...")
+    logger.info("Bot is starting with original structure and precisely fixed handlers...")
     application.run_polling()
 
 if __name__ == "__main__":
