@@ -3,7 +3,4 @@ yt-dlp
 psycopg2-binary
 sqlalchemy
 requests
-# --- الاعتماديات الجديدة لتحليل المشاعر ---
-arabert
-torch
-transformers
+simple-sentiment-arabic
