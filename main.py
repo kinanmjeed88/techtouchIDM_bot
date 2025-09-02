@@ -10,7 +10,7 @@ import yt_dlp
 
 # استيراد الوحدات المخصصة
 from database import (
-    save_message, SessionLocal, Message, add_or_update_group,
+    save_message, SessionLocal, Message, add_or_update_group, add_or_update_reply,
     get_all_replies, delete_reply, update_message_reactions, get_top_reacted_messages,
     remove_group, get_all_managed_groups
 )
@@ -193,7 +193,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("اختر مجموعة:", reply_markup=reply_markup)
 
     elif data.startswith('get_analysis_report_'):
-        # --- !! التصحيح هنا !! ---
         group_id = data.replace('get_analysis_report_', '')
         await query.edit_message_text("جاري إعداد تقرير التحليل...")
         db = SessionLocal()
@@ -220,7 +219,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             db.close()
 
     elif data.startswith('get_top_comments_'):
-        # --- !! التصحيح هنا !! ---
         group_id = data.replace('get_top_comments_', '')
         await query.edit_message_text("جاري جلب أكثر التعليقات تفاعلاً...")
         top_messages = get_top_reacted_messages(group_id, limit=5)
