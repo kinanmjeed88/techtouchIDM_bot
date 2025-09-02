@@ -1,38 +1,35 @@
 import logging
-from pyarabic_sentiment.sentiment_analyzer import SentimentAnalyzer
+from farasa.segmenter import FarasaSegmenter
+from farasa.pos import FarasaPOSTagger
+from farasa.ner import FarasaNER
+from farasa.diacritizer import FarasaDiacritizer
+from farasa.sentiment import FarasaSentimentAnalyzer
+
+# ملاحظة: قد لا نحتاج لكل هذه، لكن تهيئتها لا يضر
+# الأهم هو FarasaSentimentAnalyzer
+sentiment_analyzer = FarasaSentimentAnalyzer()
 
 logger = logging.getLogger(__name__)
 
-# تهيئة المحلل مرة واحدة عند بدء التشغيل
-# هذه المكتبة حديثة ومتوافقة وتعمل محليًا
-sa = SentimentAnalyzer()
-
 def analyze_sentiment_hf(text: str) -> str:
     """
-    تحليل مشاعر النص باستخدام مكتبة pyarabic-sentiment التي تعمل محليًا.
+    تحليل مشاعر النص باستخدام مكتبة Farasa التي تعمل محليًا.
     """
     if not text or not text.strip():
         return 'neutral'
     
     try:
         # استدعاء المحلل للحصول على النتيجة
-        # سيعطينا قاموسًا مثل: {'negative': 0.8, 'neutral': 0.1, 'positive': 0.1}
-        result = sa.predict(text)
+        # سيعطينا 'POS' أو 'NEG'
+        result = sentiment_analyzer.analyze(text)
         
-        # العثور على الشعور الذي يمتلك أعلى درجة
-        # sentiment = max(result, key=result.get)
-        
-        # استخدام منطق أكثر دقة لتجنب التحيز نحو المحايد
-        pos_score = result.get('positive', 0)
-        neg_score = result.get('negative', 0)
-
-        if pos_score > neg_score and pos_score > 0.4:
+        if result == 'POS':
             return 'positive'
-        elif neg_score > pos_score and neg_score > 0.4:
+        elif result == 'NEG':
             return 'negative'
         else:
             return 'neutral'
 
     except Exception as e:
-        logger.error(f"PyArabic-Sentiment analysis failed: {e}", exc_info=True)
+        logger.error(f"Farasa analysis failed: {e}", exc_info=True)
         return 'neutral'
