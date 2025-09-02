@@ -5,50 +5,55 @@ import time
 
 logger = logging.getLogger(__name__)
 
-# العودة إلى الـ API العام والمباشر للنموذج
-API_URL = "https://api-inference.huggingface.co/models/CAMeL-Lab/bert-base-arabic-camelbert-da-sentiment"
-HUGGINGFACE_TOKEN = os.environ.get('HUGGINGFACE_TOKEN')
+# --- !! استخدام نموذج تحليل مختلف ومشهور !! ---
+API_URL = "https://api-inference.huggingface.co/models/akhooli/xlm-roberta-base-arabic-sent"
+# -------------------------------------------------
 
+HUGGINGFACE_TOKEN = os.environ.get('HUGGINGFACE_TOKEN')
 headers = {"Authorization": f"Bearer {HUGGINGFACE_TOKEN}"}
 
 def analyze_sentiment_hf(text: str) -> str:
     """
-    تحليل مشاعر النص باستخدام الـ API العام مع آلية إعادة المحاولة.
+    تحليل مشاعر النص باستخدام نموذج بديل مع آلية إعادة المحاولة.
     """
     if not text or not text.strip():
         return 'neutral'
 
-    # --- !! آلية إعادة المحاولة الجديدة !! ---
     max_retries = 3
     for attempt in range(max_retries):
         try:
-            response = requests.post(API_URL, headers=headers, json={"inputs": text}, timeout=15)
+            # هذا النموذج يتوقع بنية مختلفة قليلاً للـ payload
+            payload = {"inputs": text}
+            response = requests.post(API_URL, headers=headers, json=payload, timeout=20)
 
             if response.status_code == 200:
                 result = response.json()
-                if result and isinstance(result, list) and 'label' in result[0]:
-                    # استخراج التصنيف وتحويله ليتوافق مع قيمنا
-                    label = result[0]['label'].lower()
-                    if 'positive' in label: return 'positive'
-                    if 'negative' in label: return 'negative'
-                    return 'neutral'
-                
-            # إذا كانت الخدمة مشغولة، انتظر وحاول مرة أخرى
+                # بنية الرد مختلفة أيضًا، يجب أن نتعامل معها
+                if result and isinstance(result, list) and result[0]:
+                    # البحث عن التصنيف الأعلى درجة
+                    top_sentiment = max(result[0], key=lambda x: x['score'])
+                    label = top_sentiment['label'].lower()
+                        
+                    # مطابقة التصنيفات مع قيمنا
+                    if label == 'positive':
+                        return 'positive'
+                    elif label == 'negative':
+                        return 'negative'
+                    else: # 'neutral' or any other label
+                        return 'neutral'
+
             elif response.status_code == 503:
-                logger.warning(f"Attempt {attempt + 1}: Service unavailable (503), retrying in 2 seconds...")
-                time.sleep(2) # انتظر ثانيتين
-                continue # انتقل إلى المحاولة التالية
+                logger.warning(f"Attempt {attempt + 1}: Service unavailable (503), retrying in 3 seconds...")
+                time.sleep(3)
+                continue
                 
-            # لأي خطأ آخر، لا تقم بإعادة المحاولة
             else:
-                logger.error(f"Hugging Face API Error: Status Code {response.status_code} - Response: {response.text}")
+                logger.error(f"Hugging Face API Error (Model: xlm-roberta): Status Code {response.status_code} - Response: {response.text}")
                 return 'neutral'
 
         except requests.exceptions.RequestException as e:
             logger.error(f"Attempt {attempt + 1}: An exception occurred: {e}")
-            time.sleep(1) # انتظر ثانية قبل المحاولة التالية
+            time.sleep(2)
 
-    # إذا فشلت كل المحاولات
     logger.error("All retry attempts failed for sentiment analysis.")
     return 'neutral'
-
