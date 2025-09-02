@@ -16,8 +16,7 @@ from database import (
 )
 from analysis import analyze_sentiment_hf
 
-# إعداد نظام التسجيل (Logging)
-# غير مستوى التسجيل إلى DEBUG لرؤية كل الرسائل التشخيصية
+# إعداد نظام التسجيل
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -28,8 +27,7 @@ ADMIN_ID = os.environ.get('ADMIN_ID')
 # مراحل المحادثة
 KEYWORD, REPLY_TEXT = range(2)
 
-# --- الوظائف الأساسية للبوت ---
-
+# --- الدوال تبقى كما هي ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text('بوت عمل احصائية')
 
@@ -195,35 +193,17 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("اختر مجموعة:", reply_markup=reply_markup)
 
     elif data.startswith('get_analysis_report_'):
-        group_id_from_button = data.split('_', 2)[2]
-        
-        # --- !! التشخيص هنا !! ---
-        logger.info("--- REPORTING CHECKPOINT 1 ---")
-        logger.info(f"Requesting report for group_id: '{group_id_from_button}' (Type: {type(group_id_from_button)})")
-        
+        # --- !! التصحيح هنا !! ---
+        group_id = data.replace('get_analysis_report_', '')
         await query.edit_message_text("جاري إعداد تقرير التحليل...")
         db = SessionLocal()
         try:
-            all_messages_in_db = db.query(Message).all()
-            logger.info(f"Total messages in DB before filtering: {len(all_messages_in_db)}")
-            # طباعة أول 5 رسائل فقط لتجنب إغراق السجلات
-            for msg in all_messages_in_db[:5]:
-                logger.info(f"DB Sample: ID={msg.id}, GroupID='{msg.group_id}' (Type: {type(msg.group_id)})")
-            
             seven_days_ago = datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=7)
-            
-            messages = db.query(Message).filter(
-                Message.group_id == group_id_from_button, 
-                Message.timestamp >= seven_days_ago
-            ).all()
-            
-            logger.info(f"Found {len(messages)} messages after filtering for group '{group_id_from_button}'.")
-
+            messages = db.query(Message).filter(Message.group_id == group_id, Message.timestamp >= seven_days_ago).all()
             total_messages = len(messages)
             if total_messages == 0:
                 await query.edit_message_text("لا توجد رسائل لتحليلها في هذه المجموعة.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ عودة", callback_data='select_group_for_report')]]))
                 return
-            
             positive_count = sum(1 for m in messages if m.sentiment == 'positive')
             negative_count = sum(1 for m in messages if m.sentiment == 'negative')
             neutral_count = total_messages - positive_count - negative_count
@@ -240,7 +220,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             db.close()
 
     elif data.startswith('get_top_comments_'):
-        group_id = data.split('_', 2)[2]
+        # --- !! التصحيح هنا !! ---
+        group_id = data.replace('get_top_comments_', '')
         await query.edit_message_text("جاري جلب أكثر التعليقات تفاعلاً...")
         top_messages = get_top_reacted_messages(group_id, limit=5)
         report = "⭐ **أكثر التعليقات تفاعلاً**\n\n"
