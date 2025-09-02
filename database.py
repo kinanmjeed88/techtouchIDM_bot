@@ -34,7 +34,8 @@ class BannedWord(Base):
     __tablename__ = "banned_words"
     id = Column(Integer, primary_key=True, index=True)
     word = Column(String, unique=True, index=True)
-    mute_duration = Column(String, nullable=True) # \'day\', \'week\', \'month\', None
+    # [FIX] تم إصلاح التعليق لإزالة الأحرف الخاطئة
+    mute_duration = Column(String, nullable=True) # 'day', 'week', 'month', None
 
 class BannedLink(Base):
     __tablename__ = "banned_links"
@@ -165,11 +166,12 @@ def mute_user(telegram_id: str, duration: str):
     try:
         user = db.query(User).filter(User.telegram_id == str(telegram_id)).first()
         if user:
-            if duration == \'day\':
+            # [FIX] تم إصلاح الخطأ بإزالة الشرطة المائلة العكسية (\)
+            if duration == 'day':
                 user.muted_until = datetime.datetime.utcnow() + datetime.timedelta(days=1)
-            elif duration == \'week\':
+            elif duration == 'week':
                 user.muted_until = datetime.datetime.utcnow() + datetime.timedelta(weeks=1)
-            elif duration == \'month\':
+            elif duration == 'month':
                 user.muted_until = datetime.datetime.utcnow() + datetime.timedelta(days=30) # تقريبي
             else:
                 user.muted_until = None # لإلغاء التقييد أو بدون تقييد
