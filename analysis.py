@@ -1,59 +1,62 @@
 import os
 import requests
 import logging
+import json
 
-# إعداد المسجل
 logger = logging.getLogger(__name__)
 
-# قراءة التوكن من متغيرات البيئة
-HUGGINGFACE_TOKEN = os.environ.get("HUGGINGFACE_TOKEN")
-
-# --- التعديل هنا: استخدام نموذج مختلف وموثوق ---
-# هذا النموذج متخصص في تحليل المشاعر للنصوص العربية
-API_URL = "https://api-inference.huggingface.co/models/akhooli/xlm-r-large-arabic-sent"
+API_URL = os.environ.get('HF_SPACE_API_URL')
+HUGGINGFACE_TOKEN = os.environ.get('HUGGINGFACE_TOKEN')
 
 def analyze_sentiment_hf(text: str) -> str:
     """
-    يحلل مشاعر النص باستخدام واجهة برمجة تطبيقات Hugging Face.
+    تحليل مشاعر النص باستخدام نقطة النهاية المخصصة (HF Space) مع تشخيص مفصل.
     """
     if not text or not text.strip():
+        logger.warning("Analysis skipped: Input text is empty.")
+        return 'neutral'
+    
+    if not API_URL:
+        logger.error("Analysis failed: HF_SPACE_API_URL environment variable is not set.")
         return 'neutral'
 
-    if not HUGGINGFACE_TOKEN:
-        logger.warning("HUGGINGFACE_TOKEN is not set. Returning 'neutral'.")
-        return 'neutral'
-
-    headers = {"Authorization": f"Bearer {HUGGINGFACE_TOKEN}"}
-    payload = {"inputs": text}
+    # بناء رأس الطلب
+    headers = {
+        "Authorization": f"Bearer {HUGGINGFACE_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    
+    # بناء جسم الطلب (Payload)
+    payload = {"data": [text]}
+    
+    logger.info(f"--- [ANALYSIS-START] ---")
+    logger.info(f"Sending request to: {API_URL}")
+    logger.info(f"Payload: {json.dumps(payload)}")
 
     try:
-        response = requests.post(API_URL, headers=headers, json=payload, timeout=15)
+        response = requests.post(API_URL, headers=headers, json=payload, timeout=20) # زيادة مهلة الانتظار
+        
+        logger.info(f"Received response. Status Code: {response.status_code}")
+        logger.info(f"Response Body: {response.text}")
 
         if response.status_code == 200:
             result = response.json()
-            # هيكل الرد قد يختلف بين النماذج، لذا نجعله مرنًا
-            if isinstance(result, list) and result and isinstance(result[0], list) and result[0]:
-                # العثور على التصنيف الأعلى درجة
-                top_label = max(result[0], key=lambda x: x['score'])
-                label = top_label['label'].lower()
-
-                # توحيد التصنيفات (قد تكون 'POSITIVE', 'NEGATIVE', 'NEUTRAL')
-                if 'positive' in label:
-                    return 'positive'
-                elif 'negative' in label:
-                    return 'negative'
+            
+            if 'data' in result and isinstance(result['data'], list) and result['data']:
+                sentiment = result['data'][0]
+                if sentiment in ['positive', 'negative', 'neutral']:
+                    logger.info(f"--- [ANALYSIS-SUCCESS] --- Sentiment: {sentiment}")
+                    return sentiment
                 else:
+                    logger.warning(f"Analysis result is unexpected: {sentiment}")
                     return 'neutral'
             else:
-                logger.warning(f"Unexpected API response format: {result}")
+                logger.warning(f"Analysis response format is unexpected: {result}")
                 return 'neutral'
         else:
-            logger.error(f"Hugging Face API Error: Status Code {response.status_code} - Response: {response.text}")
+            logger.error(f"--- [ANALYSIS-FAIL] --- Status Code: {response.status_code}")
             return 'neutral'
 
-    except requests.RequestException as e:
-        logger.error(f"Hugging Face request failed: {e}")
-        return 'neutral'
-    except Exception as e:
-        logger.error(f"An unexpected error occurred in sentiment analysis: {e}")
+    except requests.exceptions.RequestException as e:
+        logger.error(f"--- [ANALYSIS-EXCEPTION] --- An exception occurred: {e}", exc_info=True)
         return 'neutral'
