@@ -208,7 +208,13 @@ async def manage_list_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, i
         [InlineKeyboardButton("🗑️ حذف", callback_data=del_cb)],
         [InlineKeyboardButton("⬅️ عودة", callback_data=back_cb)]
     ]
-    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN_V2)
+    try:
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN_V2)
+    except BadRequest as e:
+        if "Can't parse entities" in str(e):
+            await query.edit_message_text(f"قائمة {item_type}:\n" + ("\n".join(f"- {item}" for item in items) if items else "لا يوجد عناصر."), reply_markup=InlineKeyboardMarkup(keyboard))
+        else:
+            raise e
 
 async def add_item_start(update: Update, context: ContextTypes.DEFAULT_TYPE, item_type: str, state):
     query = update.callback_query
