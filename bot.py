@@ -219,20 +219,33 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "banned_add":
         await query.edit_message_text("أرسل الكلمة التي تريد حظرها.")
         context.user_data['next_step'] = 'banned_add_word'
+    
+    # ### الإصلاح هنا ###
     elif data.startswith("banned_set_duration_"):
         parts = data.split('_')
         word, duration = parts[3], int(parts[4])
-        context.user_data.update({'banned_word': word, 'banned_duration': duration, 'next_step': 'banned_add_warning'})
+        # تخزين جميع المعلومات اللازمة للخطوة التالية
+        context.user_data.update({
+            'banned_word': word,
+            'banned_duration': duration,
+            'next_step': 'banned_add_warning'
+        })
         await query.edit_message_text(f"الكلمة: {word}\nالمدة: {duration} دقيقة.\n\nالآن أرسل رسالة التحذير.")
+        
     elif data == "banned_delete":
         await query.edit_message_text("أرسل الكلمة التي تريد حذفها من الحظر.")
         context.user_data['next_step'] = 'banned_delete_word'
+    
+    # ### الإصلاح هنا ###
     elif data == "banned_list":
         conn = get_db_connection();
+        if not conn: return
         with conn.cursor() as cur: cur.execute("SELECT word, duration_minutes FROM banned_words;")
         words = cur.fetchall(); conn.close()
         text = "قائمة الكلمات المحظورة:\n" + "\n".join([f"- {w} ({d} د)" for w, d in words]) if words else "لا توجد كلمات محظورة."
+        # إزالة parse_mode لتجنب الأخطاء
         await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="admin_manage_banned")]]))
+        
     elif data == "admin_manage_replies":
         kb = [[InlineKeyboardButton("➕ إضافة رد", callback_data="reply_add")], [InlineKeyboardButton("➖ حذف رد", callback_data="reply_delete")], [InlineKeyboardButton("📋 عرض الكل", callback_data="reply_list")], [InlineKeyboardButton("🔙 رجوع", callback_data="admin_panel_main")]]
         await query.edit_message_text("📝 إدارة الردود التلقائية:", reply_markup=InlineKeyboardMarkup(kb))
@@ -242,12 +255,16 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "reply_delete":
         await query.edit_message_text("أرسل الكلمة المفتاحية للرد الذي تريد حذفه.")
         context.user_data['next_step'] = 'reply_delete_keyword'
+    
+    # ### الإصلاح هنا ###
     elif data == "reply_list":
         conn = get_db_connection();
+        if not conn: return
         with conn.cursor() as cur: cur.execute("SELECT keyword FROM auto_replies;")
         replies = cur.fetchall(); conn.close()
         text = "قائمة الردود التلقائية:\n" + "\n".join([f"- {r[0]}" for r in replies]) if replies else "لا توجد ردود تلقائية."
         await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="admin_manage_replies")]]))
+        
     elif data == "admin_manage_links":
         kb = [[InlineKeyboardButton("➕ إضافة رابط", callback_data="link_add")], [InlineKeyboardButton("➖ حذف رابط", callback_data="link_delete")], [InlineKeyboardButton("📋 عرض الكل", callback_data="link_list")], [InlineKeyboardButton("🔙 رجوع", callback_data="admin_panel_main")]]
         await query.edit_message_text("🔗 إدارة الروابط المسموحة:", reply_markup=InlineKeyboardMarkup(kb))
@@ -257,12 +274,16 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "link_delete":
         await query.edit_message_text("أرسل جزء الرابط الذي تريد حذفه.")
         context.user_data['next_step'] = 'link_delete_pattern'
+        
+    # ### الإصلاح هنا ###
     elif data == "link_list":
         conn = get_db_connection();
+        if not conn: return
         with conn.cursor() as cur: cur.execute("SELECT link_pattern FROM allowed_links;")
         links = cur.fetchall(); conn.close()
         text = "قائمة الروابط المسموحة:\n" + "\n".join([f"- {l[0]}" for l in links]) if links else "لا توجد روابط مسموحة."
         await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="admin_manage_links")]]))
+        
     elif data == "admin_edit_messages":
         kb = [[InlineKeyboardButton("تعديل رسالة الترحيب", callback_data="msg_edit_welcome")], [InlineKeyboardButton("تعديل رسالة الرد على التواصل", callback_data="msg_edit_forward")], [InlineKeyboardButton("🔙 رجوع", callback_data="admin_panel_main")]]
         await query.edit_message_text("⚙️ تعديل رسائل البوت:", reply_markup=InlineKeyboardMarkup(kb))
@@ -344,7 +365,7 @@ def main():
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, media_downloader_handler), group=1)
     application.add_handler(MessageHandler(filters.ChatType.GROUPS & (filters.TEXT | filters.CAPTION) & ~filters.COMMAND, group_message_handler), group=2)
     application.add_handler(MessageHandler(filters.ChatType.PRIVATE & ~filters.COMMAND, private_message_handler), group=3)
-    logger.info("البوت قيد التشغيل (الإصدار 2.0 المصحح)...")
+    logger.info("البوت قيد التشغيل (الإصدار 2.1 المصحح)...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
