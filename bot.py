@@ -21,8 +21,8 @@ from telegram.ext import (
 from telegram.constants import ParseMode
 from telegram.error import BadRequest, Forbidden
 
-# --- استيراد المكتبة الجديدة (بالطريقة الصحيحة) ---
-from smd import smd
+# --- استيراد المكتبة الجديدة (بالطريقة الصحيحة النهائية) ---
+from smd.downloader import Downloader
 
 # استيراد مكتبة تحميل متغيرات البيئة
 from dotenv import load_dotenv
@@ -205,8 +205,8 @@ async def media_downloader_handler(update: Update, context: ContextTypes.DEFAULT
     os.makedirs(download_folder, exist_ok=True)
 
     try:
-        # --- الإصلاح هنا: استخدام smd بدلاً من SocialMediaDownloader ---
-        downloader = smd(url=url, filepath=download_folder)
+        # --- الإصلاح هنا: استخدام Downloader ---
+        downloader = Downloader(url=url, filepath=download_folder)
         
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, downloader.download)
@@ -390,7 +390,7 @@ def main():
     application.add_handler(MessageHandler(filters.ChatType.GROUPS & (filters.TEXT | filters.CAPTION) & ~filters.COMMAND, group_message_handler), group=2)
     application.add_handler(MessageHandler(filters.ChatType.PRIVATE & ~filters.COMMAND, private_message_handler), group=3)
     
-    logger.info("البوت قيد التشغيل (الإصدار 3.1 - مع إصلاح SMD)...")
+    logger.info("البوت قيد التشغيل (الإصدار 3.2 - مع إصلاح SMD النهائي)...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
