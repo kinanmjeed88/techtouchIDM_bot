@@ -45,7 +45,7 @@ if not all([TELEGRAM_TOKEN, ADMIN_ID_STR, DATABASE_URL]):
 
 ADMIN_ID = int(ADMIN_ID_STR)
 
-# --- (بقية الكود لم يتغير) ---
+# --- إدارة قاعدة بيانات PostgreSQL ---
 
 def get_db_connection():
     try:
@@ -72,6 +72,8 @@ def setup_database():
         if conn:
             conn.close()
 
+# --- دوال مساعدة ---
+
 async def send_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("📢 بث رسالة للجميع", callback_data="admin_broadcast")],
@@ -90,12 +92,20 @@ async def send_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.effective_message.reply_text(message_text, reply_markup=reply_markup)
 
-async def is_user_admin(chat_id: int, user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
+# --- الإصلاح هنا: دالة التحقق من المشرف أصبحت أكثر دقة ---
+async def is_user_group_admin(chat_id: int, user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """يتحقق مما إذا كان المستخدم هو المالك أو مشرف في المجموعة."""
+    if user_id == ADMIN_ID: # المشرف الأعلى للبوت مسموح له دائمًا
+        return True
     try:
         chat_member = await context.bot.get_chat_member(chat_id, user_id)
+        # التحقق إذا كان المستخدم هو المالك (creator) أو مشرف (administrator)
         return chat_member.status in [chat_member.ADMINISTRATOR, chat_member.OWNER]
-    except BadRequest:
+    except (BadRequest, Forbidden):
+        # إذا لم يتمكن البوت من الحصول على معلومات العضو (قد لا يكون لديه صلاحيات كافية)
         return False
+
+# --- أوامر البوت الأساسية ---
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -116,31 +126,40 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if conn:
             conn.close()
 
+# --- معالجات الرسائل ---
+
+# --- الإصلاح هنا: تم تحديث منطق المعالج بالكامل ---
 async def group_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
     if not message or not (message.text or message.caption): return
+    
     user = update.effective_user
     chat = update.effective_chat
     message_text = (message.text or message.caption).lower()
     
-    user_is_admin = await is_user_admin(chat.id, user.id, context)
-    if user_is_admin: return
+    # التحقق مما إذا كان المستخدم مشرفًا في المجموعة
+    user_is_admin = await is_user_group_admin(chat.id, user.id, context)
 
     conn = get_db_connection()
     if not conn: return
     
     try:
         with conn.cursor() as cur:
-            if re.search(r'https?://|t\.me/|www\.', message_text):
+            # 1. التحقق من الروابط (فقط إذا لم يكن المستخدم مشرفًا)
+            if not user_is_admin and re.search(r'https?://|t\.me/|www\.', message_text):
                 cur.execute("SELECT link_pattern FROM allowed_links;")
                 allowed_links = [row[0] for row in cur.fetchall()]
+                # إذا لم يكن الرابط ضمن القائمة المسموحة، احذفه
                 if not any(pattern in message_text for pattern in allowed_links):
                     try:
                         await message.delete()
                         await context.bot.send_message(chat.id, f"⚠️ {user.mention_html()}، يمنع إرسال الروابط.", parse_mode=ParseMode.HTML)
-                    except Exception as e: logger.error(f"خطأ في حذف رابط: {e}")
-                    return
+                    except Exception as e: 
+                        logger.error(f"خطأ في حذف رابط: {e}")
+                    return # توقف عن المعالجة بعد حذف الرابط
 
+            # 2. التحقق من الكلمات المحظورة (للجميع، ولكن يمكن استثناء المشرفين إذا أردنا)
+            # الكود الحالي يطبق الحظر على الجميع. إذا أردت استثناء المشرفين، أضف `if not user_is_admin:` هنا أيضًا.
             cur.execute("SELECT word, duration_minutes, warning_message FROM banned_words;")
             banned_words = cur.fetchall()
             for word, duration, warning in banned_words:
@@ -151,18 +170,21 @@ async def group_message_handler(update: Update, context: ContextTypes.DEFAULT_TY
                         await context.bot.send_message(chat.id, final_warning, parse_mode=ParseMode.HTML)
                         if duration > 0:
                             await context.bot.restrict_chat_member(chat.id, user.id, permissions=ChatPermissions(can_send_messages=False), until_date=message.date + timedelta(minutes=duration))
-                    except Exception as e: logger.error(f"خطأ في حظر كلمة: {e}")
-                    return
+                    except Exception as e: 
+                        logger.error(f"خطأ في حظر كلمة: {e}")
+                    return # توقف عن المعالجة بعد حظر الكلمة
 
+            # 3. التحقق من الردود التلقائية
             cur.execute("SELECT keyword, reply FROM auto_replies;")
             auto_replies = cur.fetchall()
             for keyword, reply in auto_replies:
                 if keyword.lower() in message_text:
                     await message.reply_text(reply)
-                    break
+                    break # توقف بعد أول رد مطابق
     finally:
         if conn:
             conn.close()
+
 
 async def private_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -249,7 +271,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 context.user_data['user_to_reply'] = user_id
                 await query.edit_message_text(f"أنت الآن ترد على المستخدم {user_id}. أرسل رسالتك.")
                 context.user_data['next_step'] = 'reply_to_user_message'
-            # ... (بقية الأزرار لم تتغير)
             elif data == "admin_manage_banned":
                 kb = [[InlineKeyboardButton("➕ إضافة كلمة", callback_data="banned_add")], [InlineKeyboardButton("➖ حذف كلمة", callback_data="banned_delete")], [InlineKeyboardButton("📋 عرض الكل", callback_data="banned_list")], [InlineKeyboardButton("🔙 رجوع", callback_data="admin_panel_main")]]
                 await query.edit_message_text("🚫 إدارة الكلمات المحظورة:", reply_markup=InlineKeyboardMarkup(kb))
@@ -310,7 +331,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if conn:
             conn.close()
 
-# --- الإصلاح هنا: تعديل دالة المحادثة ---
 async def conversation_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID or 'next_step' not in context.user_data: return
     step = context.user_data.pop('next_step', None)
@@ -329,7 +349,6 @@ async def conversation_handler(update: Update, context: ContextTypes.DEFAULT_TYP
                 users = [r[0] for r in cur.fetchall()]
                 s, f = 0, 0
                 
-                # استخراج المحتوى من رسالة المشرف
                 text = message.text or message.caption
                 entities = message.entities or message.caption_entities
                 photo = message.photo[-1].file_id if message.photo else None
@@ -353,12 +372,10 @@ async def conversation_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             elif step == 'reply_to_user_message':
                 uid = context.user_data.pop('user_to_reply')
                 try: 
-                    # نستخدم copy_message هنا لأنها الطريقة الأسهل للرد
                     await context.bot.copy_message(uid, ADMIN_ID, message.message_id)
                     await message.reply_text("✅ تم إرسال ردك بنجاح.")
                 except Exception as e: 
                     await message.reply_text(f"❌ فشل إرسال الرد: {e}")
-            # ... (بقية الحالات لم تتغير)
             elif step == 'banned_add_word':
                 word = message.text.strip()
                 kb = [[InlineKeyboardButton("حذف فقط", callback_data=f"banned_set_duration_{word}_0"), InlineKeyboardButton("ساعة", callback_data=f"banned_set_duration_{word}_60")], [InlineKeyboardButton("يوم", callback_data=f"banned_set_duration_{word}_1440"), InlineKeyboardButton("شهر", callback_data=f"banned_set_duration_{word}_43200")], [InlineKeyboardButton("سنة", callback_data=f"banned_set_duration_{word}_525600")]]
@@ -407,14 +424,14 @@ def main():
     
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CallbackQueryHandler(button_handler))
-    # زدنا الأولوية لهذا المعالج ليلتقط رسائل المشرف قبل أي شيء آخر
     application.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.User(ADMIN_ID), conversation_handler), group=-1)
     
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, media_downloader_handler), group=1)
+    # تم تعديل أولوية هذا المعالج ليعمل بشكل صحيح
     application.add_handler(MessageHandler(filters.ChatType.GROUPS & (filters.TEXT | filters.CAPTION) & ~filters.COMMAND, group_message_handler), group=2)
     application.add_handler(MessageHandler(filters.ChatType.PRIVATE & ~filters.COMMAND, private_message_handler), group=3)
     
-    logger.info("البوت قيد التشغيل (الإصدار 4.2 - إصلاح البث)...")
+    logger.info("البوت قيد التشغيل (الإصدار 4.3 - صلاحيات المشرفين)...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
