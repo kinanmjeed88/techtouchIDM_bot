@@ -21,8 +21,8 @@ from telegram.ext import (
 from telegram.constants import ParseMode
 from telegram.error import BadRequest, Forbidden
 
-# استيراد مكتبة تحميل الفيديوهات
-import yt_dlp
+# استيراد المكتبة الجديدة
+from smd import SocialMediaDownloader
 
 # استيراد مكتبة تحميل متغيرات البيئة
 from dotenv import load_dotenv
@@ -196,30 +196,47 @@ async def private_message_handler(update: Update, context: ContextTypes.DEFAULT_
         if conn:
             conn.close()
 
+# --- دالة التحميل الجديدة باستخدام SMD ---
 async def media_downloader_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
     if not message or not message.text: return
-    url = message.text
-    if not (re.match(r'https?://', url) and any(site in url for site in ['tiktok', 'instagram', 'facebook', 'youtube'])): return
+    url = message.text.strip()
     
-    processing_message = await message.reply_text("⏳ جاري معالجة الرابط...")
-    download_path = os.path.join('downloads', f'{message.message_id}')
-    os.makedirs('downloads', exist_ok=True)
-    
-    ydl_opts = {'format': 'best', 'outtmpl': f'{download_path}.%(ext)s', 'quiet': True, 'noplaylist': True, 'max_filesize': 50 * 1024 * 1024}
-    
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            filename = ydl.prepare_filename(info)
-            await context.bot.send_video(chat_id=message.chat_id, video=open(filename, 'rb'), caption=info.get('title', 'تم التحميل'))
-            os.remove(filename)
-            await processing_message.delete()
-    except Exception as e:
-        logger.error(f"خطأ في تحميل الفيديو: {e}")
-        await processing_message.edit_text("❌ حدث خطأ أثناء التحميل.")
+    if not re.match(r'https?://', url):
+        return
 
-# --- معالجات الأزرار والمحادثات (إصلاح شامل) ---
+    processing_message = await message.reply_text("⏳ جاري معالجة الرابط...")
+    
+    download_folder = "downloads"
+    os.makedirs(download_folder, exist_ok=True)
+
+    try:
+        downloader = SocialMediaDownloader(url=url, filepath=download_folder)
+        
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, downloader.download)
+
+        downloaded_files = os.listdir(download_folder)
+        if not downloaded_files:
+            raise Exception("لم يتم العثور على الملف بعد التحميل.")
+
+        filepath = os.path.join(download_folder, downloaded_files[0])
+        
+        await context.bot.send_video(chat_id=message.chat_id, video=open(filepath, 'rb'), caption="✅ تم التحميل بنجاح")
+        
+        os.remove(filepath)
+        await processing_message.delete()
+
+    except Exception as e:
+        logger.error(f"خطأ في تحميل الفيديو باستخدام SMD: {e}")
+        await processing_message.edit_text("❌ حدث خطأ أثناء التحميل. قد يكون الفيديو خاصًا أو محذوفًا.")
+        for f in os.listdir(download_folder):
+            try:
+                os.remove(os.path.join(download_folder, f))
+            except OSError:
+                pass
+
+# --- معالجات الأزرار والمحادثات ---
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -374,11 +391,12 @@ def main():
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CallbackQueryHandler(button_handler))
     application.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.User(ADMIN_ID), conversation_handler), group=0)
+    
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, media_downloader_handler), group=1)
     application.add_handler(MessageHandler(filters.ChatType.GROUPS & (filters.TEXT | filters.CAPTION) & ~filters.COMMAND, group_message_handler), group=2)
     application.add_handler(MessageHandler(filters.ChatType.PRIVATE & ~filters.COMMAND, private_message_handler), group=3)
     
-    logger.info("البوت قيد التشغيل (الإصدار 2.4 - مستقر)...")
+    logger.info("البوت قيد التشغيل (الإصدار 3.0 - مع SMD)...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
