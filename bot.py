@@ -92,17 +92,13 @@ async def send_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.effective_message.reply_text(message_text, reply_markup=reply_markup)
 
-# --- الإصلاح هنا: دالة التحقق من المشرف أصبحت أكثر دقة ---
 async def is_user_group_admin(chat_id: int, user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    """يتحقق مما إذا كان المستخدم هو المالك أو مشرف في المجموعة."""
-    if user_id == ADMIN_ID: # المشرف الأعلى للبوت مسموح له دائمًا
+    if user_id == ADMIN_ID:
         return True
     try:
         chat_member = await context.bot.get_chat_member(chat_id, user_id)
-        # التحقق إذا كان المستخدم هو المالك (creator) أو مشرف (administrator)
         return chat_member.status in [chat_member.ADMINISTRATOR, chat_member.OWNER]
     except (BadRequest, Forbidden):
-        # إذا لم يتمكن البوت من الحصول على معلومات العضو (قد لا يكون لديه صلاحيات كافية)
         return False
 
 # --- أوامر البوت الأساسية ---
@@ -128,7 +124,6 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # --- معالجات الرسائل ---
 
-# --- الإصلاح هنا: تم تحديث منطق المعالج بالكامل ---
 async def group_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
     if not message or not (message.text or message.caption): return
@@ -137,7 +132,6 @@ async def group_message_handler(update: Update, context: ContextTypes.DEFAULT_TY
     chat = update.effective_chat
     message_text = (message.text or message.caption).lower()
     
-    # التحقق مما إذا كان المستخدم مشرفًا في المجموعة
     user_is_admin = await is_user_group_admin(chat.id, user.id, context)
 
     conn = get_db_connection()
@@ -145,21 +139,20 @@ async def group_message_handler(update: Update, context: ContextTypes.DEFAULT_TY
     
     try:
         with conn.cursor() as cur:
-            # 1. التحقق من الروابط (فقط إذا لم يكن المستخدم مشرفًا)
+            cur.execute("INSERT INTO users (user_id) VALUES (%s) ON CONFLICT (user_id) DO NOTHING;", (user.id,))
+            conn.commit()
+
             if not user_is_admin and re.search(r'https?://|t\.me/|www\.', message_text):
                 cur.execute("SELECT link_pattern FROM allowed_links;")
                 allowed_links = [row[0] for row in cur.fetchall()]
-                # إذا لم يكن الرابط ضمن القائمة المسموحة، احذفه
                 if not any(pattern in message_text for pattern in allowed_links):
                     try:
                         await message.delete()
                         await context.bot.send_message(chat.id, f"⚠️ {user.mention_html()}، يمنع إرسال الروابط.", parse_mode=ParseMode.HTML)
                     except Exception as e: 
                         logger.error(f"خطأ في حذف رابط: {e}")
-                    return # توقف عن المعالجة بعد حذف الرابط
+                    return
 
-            # 2. التحقق من الكلمات المحظورة (للجميع، ولكن يمكن استثناء المشرفين إذا أردنا)
-            # الكود الحالي يطبق الحظر على الجميع. إذا أردت استثناء المشرفين، أضف `if not user_is_admin:` هنا أيضًا.
             cur.execute("SELECT word, duration_minutes, warning_message FROM banned_words;")
             banned_words = cur.fetchall()
             for word, duration, warning in banned_words:
@@ -172,42 +165,45 @@ async def group_message_handler(update: Update, context: ContextTypes.DEFAULT_TY
                             await context.bot.restrict_chat_member(chat.id, user.id, permissions=ChatPermissions(can_send_messages=False), until_date=message.date + timedelta(minutes=duration))
                     except Exception as e: 
                         logger.error(f"خطأ في حظر كلمة: {e}")
-                    return # توقف عن المعالجة بعد حظر الكلمة
+                    return
 
-            # 3. التحقق من الردود التلقائية
             cur.execute("SELECT keyword, reply FROM auto_replies;")
             auto_replies = cur.fetchall()
             for keyword, reply in auto_replies:
                 if keyword.lower() in message_text:
                     await message.reply_text(reply)
-                    break # توقف بعد أول رد مطابق
+                    break
     finally:
         if conn:
             conn.close()
 
-
 async def private_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     message = update.message
-    if user.id == ADMIN_ID:
-        if message.text and message.text.strip().lower() == "يمان":
-            await send_admin_panel(update, context)
-        return
-
+    
     conn = get_db_connection()
     if not conn: return
     
     try:
         with conn.cursor() as cur:
+            cur.execute("INSERT INTO users (user_id) VALUES (%s) ON CONFLICT (user_id) DO NOTHING;", (user.id,))
+            conn.commit()
+
+            if user.id == ADMIN_ID:
+                if message.text and message.text.strip().lower() == "يمان":
+                    await send_admin_panel(update, context)
+                return
+
             cur.execute("SELECT value FROM settings WHERE key = 'forward_reply_message';")
             reply_text = cur.fetchone()[0]
+        
         await message.reply_text(reply_text)
         
         keyboard = [[InlineKeyboardButton("✍️ رد على الرسالة", callback_data=f"admin_reply_to_{user.id}")]]
         await context.bot.forward_message(chat_id=ADMIN_ID, from_chat_id=user.id, message_id=message.message_id)
         await context.bot.send_message(chat_id=ADMIN_ID, text=f"👆 رسالة من {user.full_name} ({user.id})", reply_markup=InlineKeyboardMarkup(keyboard))
     except Exception as e:
-        logger.error(f"خطأ في تحويل الرسالة: {e}")
+        logger.error(f"خطأ في معالجة الرسالة الخاصة: {e}")
     finally:
         if conn:
             conn.close()
@@ -427,11 +423,10 @@ def main():
     application.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.User(ADMIN_ID), conversation_handler), group=-1)
     
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, media_downloader_handler), group=1)
-    # تم تعديل أولوية هذا المعالج ليعمل بشكل صحيح
     application.add_handler(MessageHandler(filters.ChatType.GROUPS & (filters.TEXT | filters.CAPTION) & ~filters.COMMAND, group_message_handler), group=2)
     application.add_handler(MessageHandler(filters.ChatType.PRIVATE & ~filters.COMMAND, private_message_handler), group=3)
     
-    logger.info("البوت قيد التشغيل (الإصدار 4.3 - صلاحيات المشرفين)...")
+    logger.info("البوت قيد التشغيل (الإصدار 4.4 - تحسين تسجيل المستخدمين)...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
