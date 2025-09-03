@@ -21,8 +21,8 @@ from telegram.ext import (
 from telegram.constants import ParseMode
 from telegram.error import BadRequest, Forbidden
 
-# استيراد المكتبة الجديدة
-from smd import SocialMediaDownloader
+# --- استيراد المكتبة الجديدة (بالطريقة الصحيحة) ---
+from smd import smd
 
 # استيراد مكتبة تحميل متغيرات البيئة
 from dotenv import load_dotenv
@@ -45,7 +45,7 @@ if not all([TELEGRAM_TOKEN, ADMIN_ID_STR, DATABASE_URL]):
 
 ADMIN_ID = int(ADMIN_ID_STR)
 
-# --- إدارة قاعدة بيانات PostgreSQL ---
+# --- (بقية الكود لم يتغير) ---
 
 def get_db_connection():
     try:
@@ -72,8 +72,6 @@ def setup_database():
         if conn:
             conn.close()
 
-# --- دوال مساعدة للوحة التحكم ---
-
 async def send_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("📢 بث رسالة للجميع", callback_data="admin_broadcast")],
@@ -99,8 +97,6 @@ async def is_user_admin(chat_id: int, user_id: int, context: ContextTypes.DEFAUL
     except BadRequest:
         return False
 
-# --- أوامر البوت الأساسية ---
-
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     conn = get_db_connection()
@@ -119,8 +115,6 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     finally:
         if conn:
             conn.close()
-
-# --- معالجات الرسائل ---
 
 async def group_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
@@ -211,7 +205,8 @@ async def media_downloader_handler(update: Update, context: ContextTypes.DEFAULT
     os.makedirs(download_folder, exist_ok=True)
 
     try:
-        downloader = SocialMediaDownloader(url=url, filepath=download_folder)
+        # --- الإصلاح هنا: استخدام smd بدلاً من SocialMediaDownloader ---
+        downloader = smd(url=url, filepath=download_folder)
         
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, downloader.download)
@@ -236,7 +231,7 @@ async def media_downloader_handler(update: Update, context: ContextTypes.DEFAULT
             except OSError:
                 pass
 
-# --- معالجات الأزرار والمحادثات ---
+# --- (بقية الكود لم يتغير) ---
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -383,7 +378,6 @@ async def conversation_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         if conn:
             conn.close()
 
-# --- الدالة الرئيسية ---
 def main():
     setup_database()
     application = Application.builder().token(TELEGRAM_TOKEN).build()
@@ -396,7 +390,7 @@ def main():
     application.add_handler(MessageHandler(filters.ChatType.GROUPS & (filters.TEXT | filters.CAPTION) & ~filters.COMMAND, group_message_handler), group=2)
     application.add_handler(MessageHandler(filters.ChatType.PRIVATE & ~filters.COMMAND, private_message_handler), group=3)
     
-    logger.info("البوت قيد التشغيل (الإصدار 3.0 - مع SMD)...")
+    logger.info("البوت قيد التشغيل (الإصدار 3.1 - مع إصلاح SMD)...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
