@@ -137,7 +137,6 @@ async def group_message_handler(update: Update, context: ContextTypes.DEFAULT_TY
     
     try:
         with conn.cursor() as cur:
-            # 1. فحص الروابط
             if re.search(r'https?://|t\.me/|www\.', message_text):
                 cur.execute("SELECT link_pattern FROM allowed_links;")
                 allowed_links = [row[0] for row in cur.fetchall()]
@@ -145,11 +144,9 @@ async def group_message_handler(update: Update, context: ContextTypes.DEFAULT_TY
                     try:
                         await message.delete()
                         await context.bot.send_message(chat.id, f"⚠️ {user.mention_html()}، يمنع إرسال الروابط.", parse_mode=ParseMode.HTML)
-                    except Exception as e:
-                        logger.error(f"خطأ في حذف رابط: {e}")
-                    return # ### إصلاح: الخروج من الدالة فورًا
+                    except Exception as e: logger.error(f"خطأ في حذف رابط: {e}")
+                    return
 
-            # 2. فحص الكلمات المحظورة
             cur.execute("SELECT word, duration_minutes, warning_message FROM banned_words;")
             banned_words = cur.fetchall()
             for word, duration, warning in banned_words:
@@ -160,22 +157,18 @@ async def group_message_handler(update: Update, context: ContextTypes.DEFAULT_TY
                         await context.bot.send_message(chat.id, final_warning, parse_mode=ParseMode.HTML)
                         if duration > 0:
                             await context.bot.restrict_chat_member(chat.id, user.id, permissions=ChatPermissions(can_send_messages=False), until_date=message.date + timedelta(minutes=duration))
-                    except Exception as e:
-                        logger.error(f"خطأ في حظر كلمة: {e}")
-                    return # ### إصلاح: الخروج من الدالة فورًا
+                    except Exception as e: logger.error(f"خطأ في حظر كلمة: {e}")
+                    return
 
-            # 3. فحص الردود التلقائية
             cur.execute("SELECT keyword, reply FROM auto_replies;")
             auto_replies = cur.fetchall()
             for keyword, reply in auto_replies:
                 if keyword.lower() in message_text:
                     await message.reply_text(reply)
-                    break # نخرج من حلقة الردود فقط، وليس من الدالة كلها
+                    break
     finally:
-        # ### إصلاح: التأكد من إغلاق الاتصال مرة واحدة فقط في النهاية
         if conn:
             conn.close()
-
 
 async def private_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -226,91 +219,86 @@ async def media_downloader_handler(update: Update, context: ContextTypes.DEFAULT
         logger.error(f"خطأ في تحميل الفيديو: {e}")
         await processing_message.edit_text("❌ حدث خطأ أثناء التحميل.")
 
-# --- معالجات الأزرار والمحادثات ---
+# --- معالجات الأزرار والمحادثات (إصلاح شامل) ---
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     data = query.data
     
-    # ... (بقية الكود هنا لم يتغير)
-    if data == "admin_panel_main": await send_admin_panel(update, context)
-    elif data == "admin_broadcast":
-        await query.edit_message_text("أرسل الآن الرسالة التي تود بثها للجميع. للإلغاء أرسل /cancel.")
-        context.user_data['next_step'] = 'broadcast_message'
-    elif data.startswith("admin_reply_to_"):
-        user_id = data.split('_')[3]
-        context.user_data['user_to_reply'] = user_id
-        await query.edit_message_text(f"أنت الآن ترد على المستخدم {user_id}. أرسل رسالتك.")
-        context.user_data['next_step'] = 'reply_to_user_message'
-    elif data == "admin_manage_banned":
-        kb = [[InlineKeyboardButton("➕ إضافة كلمة", callback_data="banned_add")], [InlineKeyboardButton("➖ حذف كلمة", callback_data="banned_delete")], [InlineKeyboardButton("📋 عرض الكل", callback_data="banned_list")], [InlineKeyboardButton("🔙 رجوع", callback_data="admin_panel_main")]]
-        await query.edit_message_text("🚫 إدارة الكلمات المحظورة:", reply_markup=InlineKeyboardMarkup(kb))
-    elif data == "banned_add":
-        await query.edit_message_text("أرسل الكلمة التي تريد حظرها.")
-        context.user_data['next_step'] = 'banned_add_word'
-    elif data.startswith("banned_set_duration_"):
-        parts = data.split('_')
-        word, duration = parts[3], int(parts[4])
-        context.user_data.update({'banned_word': word, 'banned_duration': duration, 'next_step': 'banned_add_warning'})
-        await query.edit_message_text(f"الكلمة: {word}\nالمدة: {duration} دقيقة.\n\nالآن أرسل رسالة التحذير.")
-    elif data == "banned_delete":
-        await query.edit_message_text("أرسل الكلمة التي تريد حذفها من الحظر.")
-        context.user_data['next_step'] = 'banned_delete_word'
-    elif data == "banned_list":
-        conn = get_db_connection();
-        if not conn: return
-        try:
-            with conn.cursor() as cur: cur.execute("SELECT word, duration_minutes FROM banned_words;")
-            words = cur.fetchall()
-            text = "قائمة الكلمات المحظورة:\n" + "\n".join([f"- {w} ({d} د)" for w, d in words]) if words else "لا توجد كلمات محظورة."
-            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="admin_manage_banned")]]))
-        finally: conn.close()
-    elif data == "admin_manage_replies":
-        kb = [[InlineKeyboardButton("➕ إضافة رد", callback_data="reply_add")], [InlineKeyboardButton("➖ حذف رد", callback_data="reply_delete")], [InlineKeyboardButton("📋 عرض الكل", callback_data="reply_list")], [InlineKeyboardButton("🔙 رجوع", callback_data="admin_panel_main")]]
-        await query.edit_message_text("📝 إدارة الردود التلقائية:", reply_markup=InlineKeyboardMarkup(kb))
-    elif data == "reply_add":
-        await query.edit_message_text("أرسل الكلمة المفتاحية للرد الجديد.")
-        context.user_data['next_step'] = 'reply_add_keyword'
-    elif data == "reply_delete":
-        await query.edit_message_text("أرسل الكلمة المفتاحية للرد الذي تريد حذفه.")
-        context.user_data['next_step'] = 'reply_delete_keyword'
-    elif data == "reply_list":
-        conn = get_db_connection();
-        if not conn: return
-        try:
-            with conn.cursor() as cur: cur.execute("SELECT keyword FROM auto_replies;")
-            replies = cur.fetchall()
-            text = "قائمة الردود التلقائية:\n" + "\n".join([f"- {r[0]}" for r in replies]) if replies else "لا توجد ردود تلقائية."
-            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="admin_manage_replies")]]))
-        finally: conn.close()
-    elif data == "admin_manage_links":
-        kb = [[InlineKeyboardButton("➕ إضافة رابط", callback_data="link_add")], [InlineKeyboardButton("➖ حذف رابط", callback_data="link_delete")], [InlineKeyboardButton("📋 عرض الكل", callback_data="link_list")], [InlineKeyboardButton("🔙 رجوع", callback_data="admin_panel_main")]]
-        await query.edit_message_text("🔗 إدارة الروابط المسموحة:", reply_markup=InlineKeyboardMarkup(kb))
-    elif data == "link_add":
-        await query.edit_message_text("أرسل جزءًا من الرابط للسماح به (مثلاً: youtube.com).")
-        context.user_data['next_step'] = 'link_add_pattern'
-    elif data == "link_delete":
-        await query.edit_message_text("أرسل جزء الرابط الذي تريد حذفه.")
-        context.user_data['next_step'] = 'link_delete_pattern'
-    elif data == "link_list":
-        conn = get_db_connection();
-        if not conn: return
-        try:
-            with conn.cursor() as cur: cur.execute("SELECT link_pattern FROM allowed_links;")
-            links = cur.fetchall()
-            text = "قائمة الروابط المسموحة:\n" + "\n".join([f"- {l[0]}" for l in links]) if links else "لا توجد روابط مسموحة."
-            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="admin_manage_links")]]))
-        finally: conn.close()
-    elif data == "admin_edit_messages":
-        kb = [[InlineKeyboardButton("تعديل رسالة الترحيب", callback_data="msg_edit_welcome")], [InlineKeyboardButton("تعديل رسالة الرد على التواصل", callback_data="msg_edit_forward")], [InlineKeyboardButton("🔙 رجوع", callback_data="admin_panel_main")]]
-        await query.edit_message_text("⚙️ تعديل رسائل البوت:", reply_markup=InlineKeyboardMarkup(kb))
-    elif data == "msg_edit_welcome":
-        await query.edit_message_text("أرسل رسالة الترحيب الجديدة.")
-        context.user_data['next_step'] = 'msg_set_welcome'
-    elif data == "msg_edit_forward":
-        await query.edit_message_text("أرسل رسالة الرد التلقائي الجديدة عند التواصل مع البوت.")
-        context.user_data['next_step'] = 'msg_set_forward'
+    conn = get_db_connection()
+    if not conn: return
+    
+    try:
+        with conn.cursor() as cur:
+            if data == "admin_panel_main": await send_admin_panel(update, context)
+            elif data == "admin_broadcast":
+                await query.edit_message_text("أرسل الآن الرسالة التي تود بثها للجميع. للإلغاء أرسل /cancel.")
+                context.user_data['next_step'] = 'broadcast_message'
+            elif data.startswith("admin_reply_to_"):
+                user_id = data.split('_')[3]
+                context.user_data['user_to_reply'] = user_id
+                await query.edit_message_text(f"أنت الآن ترد على المستخدم {user_id}. أرسل رسالتك.")
+                context.user_data['next_step'] = 'reply_to_user_message'
+            elif data == "admin_manage_banned":
+                kb = [[InlineKeyboardButton("➕ إضافة كلمة", callback_data="banned_add")], [InlineKeyboardButton("➖ حذف كلمة", callback_data="banned_delete")], [InlineKeyboardButton("📋 عرض الكل", callback_data="banned_list")], [InlineKeyboardButton("🔙 رجوع", callback_data="admin_panel_main")]]
+                await query.edit_message_text("🚫 إدارة الكلمات المحظورة:", reply_markup=InlineKeyboardMarkup(kb))
+            elif data == "banned_add":
+                await query.edit_message_text("أرسل الكلمة التي تريد حظرها.")
+                context.user_data['next_step'] = 'banned_add_word'
+            elif data.startswith("banned_set_duration_"):
+                parts = data.split('_')
+                word, duration = parts[3], int(parts[4])
+                context.user_data.update({'banned_word': word, 'banned_duration': duration, 'next_step': 'banned_add_warning'})
+                await query.edit_message_text(f"الكلمة: {word}\nالمدة: {duration} دقيقة.\n\nالآن أرسل رسالة التحذير.")
+            elif data == "banned_delete":
+                await query.edit_message_text("أرسل الكلمة التي تريد حذفها من الحظر.")
+                context.user_data['next_step'] = 'banned_delete_word'
+            elif data == "banned_list":
+                cur.execute("SELECT word, duration_minutes FROM banned_words;")
+                words = cur.fetchall()
+                text = "قائمة الكلمات المحظورة:\n" + "\n".join([f"- {w} ({d} د)" for w, d in words]) if words else "لا توجد كلمات محظورة."
+                await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="admin_manage_banned")]]))
+            elif data == "admin_manage_replies":
+                kb = [[InlineKeyboardButton("➕ إضافة رد", callback_data="reply_add")], [InlineKeyboardButton("➖ حذف رد", callback_data="reply_delete")], [InlineKeyboardButton("📋 عرض الكل", callback_data="reply_list")], [InlineKeyboardButton("🔙 رجوع", callback_data="admin_panel_main")]]
+                await query.edit_message_text("📝 إدارة الردود التلقائية:", reply_markup=InlineKeyboardMarkup(kb))
+            elif data == "reply_add":
+                await query.edit_message_text("أرسل الكلمة المفتاحية للرد الجديد.")
+                context.user_data['next_step'] = 'reply_add_keyword'
+            elif data == "reply_delete":
+                await query.edit_message_text("أرسل الكلمة المفتاحية للرد الذي تريد حذفه.")
+                context.user_data['next_step'] = 'reply_delete_keyword'
+            elif data == "reply_list":
+                cur.execute("SELECT keyword FROM auto_replies;")
+                replies = cur.fetchall()
+                text = "قائمة الردود التلقائية:\n" + "\n".join([f"- {r[0]}" for r in replies]) if replies else "لا توجد ردود تلقائية."
+                await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="admin_manage_replies")]]))
+            elif data == "admin_manage_links":
+                kb = [[InlineKeyboardButton("➕ إضافة رابط", callback_data="link_add")], [InlineKeyboardButton("➖ حذف رابط", callback_data="link_delete")], [InlineKeyboardButton("📋 عرض الكل", callback_data="link_list")], [InlineKeyboardButton("🔙 رجوع", callback_data="admin_panel_main")]]
+                await query.edit_message_text("🔗 إدارة الروابط المسموحة:", reply_markup=InlineKeyboardMarkup(kb))
+            elif data == "link_add":
+                await query.edit_message_text("أرسل جزءًا من الرابط للسماح به (مثلاً: youtube.com).")
+                context.user_data['next_step'] = 'link_add_pattern'
+            elif data == "link_delete":
+                await query.edit_message_text("أرسل جزء الرابط الذي تريد حذفه.")
+                context.user_data['next_step'] = 'link_delete_pattern'
+            elif data == "link_list":
+                cur.execute("SELECT link_pattern FROM allowed_links;")
+                links = cur.fetchall()
+                text = "قائمة الروابط المسموحة:\n" + "\n".join([f"- {l[0]}" for l in links]) if links else "لا توجد روابط مسموحة."
+                await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="admin_manage_links")]]))
+            elif data == "admin_edit_messages":
+                kb = [[InlineKeyboardButton("تعديل رسالة الترحيب", callback_data="msg_edit_welcome")], [InlineKeyboardButton("تعديل رسالة الرد على التواصل", callback_data="msg_edit_forward")], [InlineKeyboardButton("🔙 رجوع", callback_data="admin_panel_main")]]
+                await query.edit_message_text("⚙️ تعديل رسائل البوت:", reply_markup=InlineKeyboardMarkup(kb))
+            elif data == "msg_edit_welcome":
+                await query.edit_message_text("أرسل رسالة الترحيب الجديدة.")
+                context.user_data['next_step'] = 'msg_set_welcome'
+            elif data == "msg_edit_forward":
+                await query.edit_message_text("أرسل رسالة الرد التلقائي الجديدة عند التواصل مع البوت.")
+                context.user_data['next_step'] = 'msg_set_forward'
+    finally:
+        if conn:
+            conn.close()
 
 async def conversation_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID or 'next_step' not in context.user_data: return
@@ -383,7 +371,6 @@ def main():
     setup_database()
     application = Application.builder().token(TELEGRAM_TOKEN).build()
     
-    # ... (بقية الكود هنا لم يتغير)
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CallbackQueryHandler(button_handler))
     application.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.User(ADMIN_ID), conversation_handler), group=0)
@@ -391,7 +378,7 @@ def main():
     application.add_handler(MessageHandler(filters.ChatType.GROUPS & (filters.TEXT | filters.CAPTION) & ~filters.COMMAND, group_message_handler), group=2)
     application.add_handler(MessageHandler(filters.ChatType.PRIVATE & ~filters.COMMAND, private_message_handler), group=3)
     
-    logger.info("البوت قيد التشغيل (الإصدار 2.3 - مستقر)...")
+    logger.info("البوت قيد التشغيل (الإصدار 2.4 - مستقر)...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
