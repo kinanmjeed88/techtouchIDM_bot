@@ -1,13 +1,12 @@
 # database.py (النسخة النهائية والمحسّنة)
 import os
-from sqlalchemy import create_engine, Column, Integer, String, Text, BigInteger, Boolean, DateTime
+from sqlalchemy import create_engine, Column, Integer, String, Text, BigInteger, Boolean
 from sqlalchemy.orm import sessionmaker, declarative_base
 import logging
-from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
-DATABASE_URL = os.environ.get("DATABASE_URL")
+DATABASE_URL = os.environ.get('DATABASE_URL')
 if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
@@ -32,13 +31,11 @@ class BannedWord(Base):
     __tablename__ = "banned_words"
     id = Column(Integer, primary_key=True, index=True)
     word = Column(String, unique=True, nullable=False)
-    restriction_duration = Column(String, default="none") # 'day', 'week', 'month', 'none'
 
 class BannedLink(Base):
     __tablename__ = "banned_links"
     id = Column(Integer, primary_key=True, index=True)
     link_pattern = Column(String, unique=True, nullable=False)
-    restriction_duration = Column(String, default="none") # 'day', 'week', 'month', 'none'
 
 class WhitelistedLink(Base):
     __tablename__ = "whitelisted_links"
@@ -106,26 +103,15 @@ def get_blocked_user_count():
 def db_add_item(item_data, model, column_name):
     db = SessionLocal()
     try:
-        # Check if item_data is a dictionary (for BannedWord/Link with restriction_duration)
         if isinstance(item_data, dict):
-            # Check if an item with the same unique column value already exists
-            existing_item = db.query(model).filter(getattr(model, column_name) == item_data[column_name]).first()
-            if existing_item:
-                return False # Item already exists
             new_item = model(**item_data)
         else:
-            # For models without restriction_duration or when only the main column is provided
-            existing_item = db.query(model).filter(getattr(model, column_name) == item_data).first()
-            if existing_item:
-                return False # Item already exists
             new_item = model(**{column_name: item_data})
-        
         db.add(new_item)
         db.commit()
         return True
-    except Exception as e:
+    except Exception:
         db.rollback()
-        logger.error(f"Error adding item to DB: {e}")
         return False
     finally:
         db.close()
@@ -134,9 +120,6 @@ def db_get_all_items(model, column_name):
     db = SessionLocal()
     try:
         column_attr = getattr(model, column_name)
-        # Return a list of tuples if multiple columns are needed, otherwise just the column value
-        if hasattr(model, 'restriction_duration') and column_name != 'restriction_duration':
-            return [(item[0], item[1]) for item in db.query(column_attr, model.restriction_duration).all()]
         return [item[0] for item in db.query(column_attr).all()]
     finally:
         db.close()
@@ -150,10 +133,6 @@ def db_delete_item(item_to_delete, model, column_name):
             db.delete(item)
             db.commit()
             return True
-        return False
-    except Exception as e:
-        db.rollback()
-        logger.error(f"Error deleting item from DB: {e}")
         return False
     finally:
         db.close()
@@ -187,5 +166,3 @@ def set_setting(key: str, value: str):
         db.commit()
     finally:
         db.close()
-
-
