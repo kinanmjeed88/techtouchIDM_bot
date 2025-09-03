@@ -21,7 +21,7 @@ from telegram.ext import (
 from telegram.constants import ParseMode
 from telegram.error import BadRequest, Forbidden
 
-# --- العودة إلى مكتبة yt-dlp المضمونة ---
+# استيراد مكتبة yt-dlp
 import yt_dlp
 
 # استيراد مكتبة تحميل متغيرات البيئة
@@ -45,7 +45,7 @@ if not all([TELEGRAM_TOKEN, ADMIN_ID_STR, DATABASE_URL]):
 
 ADMIN_ID = int(ADMIN_ID_STR)
 
-# --- إدارة قاعدة بيانات PostgreSQL ---
+# --- (بقية الكود لم يتغير) ---
 
 def get_db_connection():
     try:
@@ -72,8 +72,6 @@ def setup_database():
         if conn:
             conn.close()
 
-# --- دوال مساعدة للوحة التحكم ---
-
 async def send_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("📢 بث رسالة للجميع", callback_data="admin_broadcast")],
@@ -99,8 +97,6 @@ async def is_user_admin(chat_id: int, user_id: int, context: ContextTypes.DEFAUL
     except BadRequest:
         return False
 
-# --- أوامر البوت الأساسية ---
-
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     conn = get_db_connection()
@@ -119,8 +115,6 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     finally:
         if conn:
             conn.close()
-
-# --- معالجات الرسائل ---
 
 async def group_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
@@ -196,7 +190,6 @@ async def private_message_handler(update: Update, context: ContextTypes.DEFAULT_
         if conn:
             conn.close()
 
-# --- دالة التحميل باستخدام yt-dlp ---
 async def media_downloader_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
     if not message or not message.text: return
@@ -215,7 +208,7 @@ async def media_downloader_handler(update: Update, context: ContextTypes.DEFAULT
         'outtmpl': os.path.join(download_folder, '%(id)s.%(ext)s'),
         'quiet': True,
         'noplaylist': True,
-        'max_filesize': 50 * 1024 * 1024, # 50MB
+        'max_filesize': 50 * 1024 * 1024,
     }
     
     try:
@@ -231,14 +224,11 @@ async def media_downloader_handler(update: Update, context: ContextTypes.DEFAULT
     except Exception as e:
         logger.error(f"خطأ في تحميل الفيديو باستخدام yt-dlp: {e}")
         await processing_message.edit_text("❌ حدث خطأ أثناء التحميل. قد يكون الفيديو خاصًا، محذوفًا، أو من منصة غير مدعومة حاليًا.")
-        # تنظيف أي ملفات قد تكون نزلت جزئيًا
         for f in os.listdir(download_folder):
             try:
                 os.remove(os.path.join(download_folder, f))
             except OSError:
                 pass
-
-# --- معالجات الأزرار والمحادثات ---
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -252,13 +242,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         with conn.cursor() as cur:
             if data == "admin_panel_main": await send_admin_panel(update, context)
             elif data == "admin_broadcast":
-                await query.edit_message_text("أرسل الآن الرسالة التي تود بثها للجميع. للإلغاء أرسل /cancel.")
+                await query.edit_message_text("أرسل الآن الرسالة التي تود بثها للجميع (نص، صورة، فيديو...). للإلغاء أرسل /cancel.")
                 context.user_data['next_step'] = 'broadcast_message'
             elif data.startswith("admin_reply_to_"):
                 user_id = data.split('_')[3]
                 context.user_data['user_to_reply'] = user_id
                 await query.edit_message_text(f"أنت الآن ترد على المستخدم {user_id}. أرسل رسالتك.")
                 context.user_data['next_step'] = 'reply_to_user_message'
+            # ... (بقية الأزرار لم تتغير)
             elif data == "admin_manage_banned":
                 kb = [[InlineKeyboardButton("➕ إضافة كلمة", callback_data="banned_add")], [InlineKeyboardButton("➖ حذف كلمة", callback_data="banned_delete")], [InlineKeyboardButton("📋 عرض الكل", callback_data="banned_list")], [InlineKeyboardButton("🔙 رجوع", callback_data="admin_panel_main")]]
                 await query.edit_message_text("🚫 إدارة الكلمات المحظورة:", reply_markup=InlineKeyboardMarkup(kb))
@@ -319,6 +310,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if conn:
             conn.close()
 
+# --- الإصلاح هنا: تعديل دالة المحادثة ---
 async def conversation_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID or 'next_step' not in context.user_data: return
     step = context.user_data.pop('next_step', None)
@@ -333,16 +325,40 @@ async def conversation_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         with conn.cursor() as cur:
             if step == 'broadcast_message':
                 await message.reply_text("⏳ جاري بدء البث...")
-                cur.execute("SELECT user_id FROM users;"); users = [r[0] for r in cur.fetchall()]
+                cur.execute("SELECT user_id FROM users;")
+                users = [r[0] for r in cur.fetchall()]
                 s, f = 0, 0
+                
+                # استخراج المحتوى من رسالة المشرف
+                text = message.text or message.caption
+                entities = message.entities or message.caption_entities
+                photo = message.photo[-1].file_id if message.photo else None
+                video = message.video.file_id if message.video else None
+                
                 for uid in users:
-                    try: await context.bot.copy_message(uid, ADMIN_ID, message.message_id); s += 1; await asyncio.sleep(0.1)
-                    except: f += 1
+                    try:
+                        if photo:
+                            await context.bot.send_photo(uid, photo, caption=text, caption_entities=entities)
+                        elif video:
+                            await context.bot.send_video(uid, video, caption=text, caption_entities=entities)
+                        elif text:
+                            await context.bot.send_message(uid, text, entities=entities)
+                        s += 1
+                        await asyncio.sleep(0.1)
+                    except Exception as e:
+                        logger.error(f"فشل البث للمستخدم {uid}: {e}")
+                        f += 1
                 await message.reply_text(f"✅ انتهى البث!\nنجح: {s}, فشل: {f}")
+
             elif step == 'reply_to_user_message':
                 uid = context.user_data.pop('user_to_reply')
-                try: await context.bot.copy_message(uid, ADMIN_ID, message.message_id); await message.reply_text("✅ تم إرسال ردك بنجاح.")
-                except Exception as e: await message.reply_text(f"❌ فشل إرسال الرد: {e}")
+                try: 
+                    # نستخدم copy_message هنا لأنها الطريقة الأسهل للرد
+                    await context.bot.copy_message(uid, ADMIN_ID, message.message_id)
+                    await message.reply_text("✅ تم إرسال ردك بنجاح.")
+                except Exception as e: 
+                    await message.reply_text(f"❌ فشل إرسال الرد: {e}")
+            # ... (بقية الحالات لم تتغير)
             elif step == 'banned_add_word':
                 word = message.text.strip()
                 kb = [[InlineKeyboardButton("حذف فقط", callback_data=f"banned_set_duration_{word}_0"), InlineKeyboardButton("ساعة", callback_data=f"banned_set_duration_{word}_60")], [InlineKeyboardButton("يوم", callback_data=f"banned_set_duration_{word}_1440"), InlineKeyboardButton("شهر", callback_data=f"banned_set_duration_{word}_43200")], [InlineKeyboardButton("سنة", callback_data=f"banned_set_duration_{word}_525600")]]
@@ -385,20 +401,20 @@ async def conversation_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         if conn:
             conn.close()
 
-# --- الدالة الرئيسية ---
 def main():
     setup_database()
     application = Application.builder().token(TELEGRAM_TOKEN).build()
     
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CallbackQueryHandler(button_handler))
-    application.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.User(ADMIN_ID), conversation_handler), group=0)
+    # زدنا الأولوية لهذا المعالج ليلتقط رسائل المشرف قبل أي شيء آخر
+    application.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.User(ADMIN_ID), conversation_handler), group=-1)
     
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, media_downloader_handler), group=1)
     application.add_handler(MessageHandler(filters.ChatType.GROUPS & (filters.TEXT | filters.CAPTION) & ~filters.COMMAND, group_message_handler), group=2)
     application.add_handler(MessageHandler(filters.ChatType.PRIVATE & ~filters.COMMAND, private_message_handler), group=3)
     
-    logger.info("البوت قيد التشغيل (الإصدار 4.1 - yt-dlp المستقر)...")
+    logger.info("البوت قيد التشغيل (الإصدار 4.2 - إصلاح البث)...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
