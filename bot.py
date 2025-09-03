@@ -54,6 +54,7 @@ def get_db_connection():
         logger.error(f"لا يمكن الاتصال بقاعدة البيانات: {e}")
         return None
 
+# --- الإصلاح هنا: إضافة جدول الحاظرين ---
 def setup_database():
     conn = get_db_connection()
     if not conn: return
@@ -64,16 +65,20 @@ def setup_database():
             cur.execute("CREATE TABLE IF NOT EXISTS auto_replies (keyword TEXT PRIMARY KEY, reply TEXT NOT NULL);")
             cur.execute("CREATE TABLE IF NOT EXISTS banned_words (word TEXT PRIMARY KEY, duration_minutes INTEGER NOT NULL, warning_message TEXT);")
             cur.execute("CREATE TABLE IF NOT EXISTS allowed_links (link_pattern TEXT PRIMARY KEY);")
+            # جدول جديد لتسجيل من قام بحظر البوت
+            cur.execute("CREATE TABLE IF NOT EXISTS blocked_users (user_id BIGINT PRIMARY KEY, blocked_date TIMESTAMPTZ DEFAULT NOW());")
+            
             cur.execute("INSERT INTO settings (key, value) VALUES ('welcome_message', 'أهلاً بك في البوت!') ON CONFLICT (key) DO NOTHING;")
             cur.execute("INSERT INTO settings (key, value) VALUES ('forward_reply_message', 'شكرًا لرسالتك، تم توصيلها للدعم وسنرد عليك قريبًا.') ON CONFLICT (key) DO NOTHING;")
         conn.commit()
-        logger.info("تم فحص وتحديث قاعدة البيانات بنجاح.")
+        logger.info("تم فحص وتحديث قاعدة البيانات بنجاح (مع جدول الحاظرين).")
     finally:
         if conn:
             conn.close()
 
 # --- دوال مساعدة ---
 
+# --- الإصلاح هنا: إضافة زر قائمة الحاظرين ---
 async def send_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("📢 بث رسالة للجميع", callback_data="admin_broadcast")],
@@ -81,6 +86,7 @@ async def send_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("🚫 إدارة الكلمات المحظورة", callback_data="admin_manage_banned")],
         [InlineKeyboardButton("🔗 إدارة الروابط المسموحة", callback_data="admin_manage_links")],
         [InlineKeyboardButton("⚙️ تعديل رسائل البوت", callback_data="admin_edit_messages")],
+        [InlineKeyboardButton("📵 قائمة من حظر البوت", callback_data="admin_blocked_list")], # زر جديد
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     message_text = "🤖 لوحة تحكم المشرف\n\nاختر أحد الخيارات لإدارة البوت:"
@@ -111,7 +117,10 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     try:
         with conn.cursor() as cur:
+            # عند إرسال /start، نضيفه للمشتركين ونزيله من قائمة الحظر (إذا كان موجودًا)
             cur.execute("INSERT INTO users (user_id) VALUES (%s) ON CONFLICT (user_id) DO NOTHING;", (user.id,))
+            cur.execute("DELETE FROM blocked_users WHERE user_id = %s;", (user.id,))
+            
             cur.execute("SELECT value FROM settings WHERE key = 'welcome_message';")
             welcome_message = cur.fetchone()[0]
         conn.commit()
@@ -122,8 +131,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if conn:
             conn.close()
 
-# --- معالجات الرسائل ---
-
+# --- (بقية معالجات الرسائل لم تتغير بشكل كبير) ---
 async def group_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
     if not message or not (message.text or message.caption): return
@@ -187,6 +195,7 @@ async def private_message_handler(update: Update, context: ContextTypes.DEFAULT_
     try:
         with conn.cursor() as cur:
             cur.execute("INSERT INTO users (user_id) VALUES (%s) ON CONFLICT (user_id) DO NOTHING;", (user.id,))
+            cur.execute("DELETE FROM blocked_users WHERE user_id = %s;", (user.id,))
             conn.commit()
 
             if user.id == ADMIN_ID:
@@ -248,6 +257,7 @@ async def media_downloader_handler(update: Update, context: ContextTypes.DEFAULT
             except OSError:
                 pass
 
+# --- الإصلاح هنا: إضافة معالج زر قائمة الحاظرين ---
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -260,8 +270,26 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         with conn.cursor() as cur:
             if data == "admin_panel_main": await send_admin_panel(update, context)
             elif data == "admin_broadcast":
-                await query.edit_message_text("أرسل الآن الرسالة التي تود بثها للجميع (نص، صورة، فيديو...). للإلغاء أرسل /cancel.")
+                await query.edit_message_text("أرسل الآن الرسالة التي تود بثها للجميع. للإلغاء أرسل /cancel.")
                 context.user_data['next_step'] = 'broadcast_message'
+            
+            # زر جديد لعرض قائمة الحاظرين
+            elif data == "admin_blocked_list":
+                cur.execute("SELECT user_id, TO_CHAR(blocked_date, 'YYYY-MM-DD') FROM blocked_users ORDER BY blocked_date DESC;")
+                blocked = cur.fetchall()
+                text = "📵 قائمة المستخدمين الذين قاموا بحظر البوت:\n\n"
+                if blocked:
+                    text += "\n".join([f"- `{uid}` (بتاريخ: {date})" for uid, date in blocked])
+                else:
+                    text += "لا يوجد أي مستخدمين في قائمة الحظر حاليًا."
+                
+                await query.edit_message_text(
+                    text, 
+                    parse_mode=ParseMode.MARKDOWN_V2,
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="admin_panel_main")]])
+                )
+
+            # (بقية الأزرار لم تتغير)
             elif data.startswith("admin_reply_to_"):
                 user_id = data.split('_')[3]
                 context.user_data['user_to_reply'] = user_id
@@ -327,6 +355,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if conn:
             conn.close()
 
+# --- الإصلاح هنا: تعديل منطق البث لتسجيل الحاظرين ---
 async def conversation_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID or 'next_step' not in context.user_data: return
     step = context.user_data.pop('next_step', None)
@@ -359,12 +388,20 @@ async def conversation_handler(update: Update, context: ContextTypes.DEFAULT_TYP
                         elif text:
                             await context.bot.send_message(uid, text, entities=entities)
                         s += 1
-                        await asyncio.sleep(0.1)
+                        await asyncio.sleep(0.05) # تقليل طفيف لزيادة سرعة البث
+                    except Forbidden:
+                        # هذا هو الخطأ الذي يعني أن المستخدم حظر البوت
+                        logger.warning(f"المستخدم {uid} حظر البوت. سيتم نقله إلى قائمة الحظر.")
+                        cur.execute("INSERT INTO blocked_users (user_id) VALUES (%s) ON CONFLICT (user_id) DO NOTHING;", (uid,))
+                        cur.execute("DELETE FROM users WHERE user_id = %s;", (uid,))
+                        conn.commit()
+                        f += 1
                     except Exception as e:
                         logger.error(f"فشل البث للمستخدم {uid}: {e}")
                         f += 1
                 await message.reply_text(f"✅ انتهى البث!\nنجح: {s}, فشل: {f}")
 
+            # (بقية الحالات لم تتغير)
             elif step == 'reply_to_user_message':
                 uid = context.user_data.pop('user_to_reply')
                 try: 
@@ -426,7 +463,7 @@ def main():
     application.add_handler(MessageHandler(filters.ChatType.GROUPS & (filters.TEXT | filters.CAPTION) & ~filters.COMMAND, group_message_handler), group=2)
     application.add_handler(MessageHandler(filters.ChatType.PRIVATE & ~filters.COMMAND, private_message_handler), group=3)
     
-    logger.info("البوت قيد التشغيل (الإصدار 4.4 - تحسين تسجيل المستخدمين)...")
+    logger.info("البوت قيد التشغيل (الإصدار 4.5 - مع قائمة الحاظرين)...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
