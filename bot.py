@@ -3,7 +3,6 @@ import logging
 import re
 import asyncio
 from datetime import timedelta
-import httpx
 
 # استيراد مكتبة قاعدة البيانات PostgreSQL
 import psycopg2
@@ -22,8 +21,8 @@ from telegram.ext import (
 from telegram.constants import ParseMode
 from telegram.error import BadRequest, Forbidden
 
-# --- استيراد مكتبة Cobalt ---
-import pycobalt
+# --- العودة إلى مكتبة yt-dlp المضمونة ---
+import yt_dlp
 
 # استيراد مكتبة تحميل متغيرات البيئة
 from dotenv import load_dotenv
@@ -46,7 +45,7 @@ if not all([TELEGRAM_TOKEN, ADMIN_ID_STR, DATABASE_URL]):
 
 ADMIN_ID = int(ADMIN_ID_STR)
 
-# --- (بقية الكود لم يتغير) ---
+# --- إدارة قاعدة بيانات PostgreSQL ---
 
 def get_db_connection():
     try:
@@ -73,6 +72,8 @@ def setup_database():
         if conn:
             conn.close()
 
+# --- دوال مساعدة للوحة التحكم ---
+
 async def send_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("📢 بث رسالة للجميع", callback_data="admin_broadcast")],
@@ -98,6 +99,8 @@ async def is_user_admin(chat_id: int, user_id: int, context: ContextTypes.DEFAUL
     except BadRequest:
         return False
 
+# --- أوامر البوت الأساسية ---
+
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     conn = get_db_connection()
@@ -116,6 +119,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     finally:
         if conn:
             conn.close()
+
+# --- معالجات الرسائل ---
 
 async def group_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
@@ -191,7 +196,7 @@ async def private_message_handler(update: Update, context: ContextTypes.DEFAULT_
         if conn:
             conn.close()
 
-# --- دالة التحميل الجديدة باستخدام Cobalt ---
+# --- دالة التحميل باستخدام yt-dlp ---
 async def media_downloader_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
     if not message or not message.text: return
@@ -201,31 +206,39 @@ async def media_downloader_handler(update: Update, context: ContextTypes.DEFAULT
         return
 
     processing_message = await message.reply_text("⏳ جاري معالجة الرابط...")
-
+    
+    download_folder = "downloads"
+    os.makedirs(download_folder, exist_ok=True)
+    
+    ydl_opts = {
+        'format': 'best',
+        'outtmpl': os.path.join(download_folder, '%(id)s.%(ext)s'),
+        'quiet': True,
+        'noplaylist': True,
+        'max_filesize': 50 * 1024 * 1024, # 50MB
+    }
+    
     try:
-        # إرسال الرابط إلى Cobalt API
-        result = await pycobalt.get_video_info(url)
-
-        # التحقق من نجاح العملية
-        if result['status'] != 'success':
-            logger.error(f"Cobalt API Error: {result.get('text', 'Unknown error')}")
-            error_message = "❌ فشل التحميل. قد يكون الرابط غير صحيح أو خاص."
-            if 'rate-limit' in result.get('text', ''):
-                error_message = "⚠️ نحن نواجه ضغطًا عاليًا. يرجى المحاولة مرة أخرى بعد قليل."
-            await processing_message.edit_text(error_message)
-            return
-
-        # إرسال الفيديو باستخدام الرابط المباشر من Cobalt
-        video_url = result['url']
-        await context.bot.send_video(chat_id=message.chat_id, video=video_url, caption="✅ تم التحميل بنجاح")
-        await processing_message.delete()
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            filename = ydl.prepare_filename(info)
+            
+            await context.bot.send_video(chat_id=message.chat_id, video=open(filename, 'rb'), caption=info.get('title', '✅ تم التحميل'))
+            
+            os.remove(filename)
+            await processing_message.delete()
 
     except Exception as e:
-        logger.error(f"خطأ في التعامل مع Cobalt: {e}")
-        await processing_message.edit_text("❌ حدث خطأ غير متوقع أثناء معالجة طلبك.")
+        logger.error(f"خطأ في تحميل الفيديو باستخدام yt-dlp: {e}")
+        await processing_message.edit_text("❌ حدث خطأ أثناء التحميل. قد يكون الفيديو خاصًا، محذوفًا، أو من منصة غير مدعومة حاليًا.")
+        # تنظيف أي ملفات قد تكون نزلت جزئيًا
+        for f in os.listdir(download_folder):
+            try:
+                os.remove(os.path.join(download_folder, f))
+            except OSError:
+                pass
 
-
-# --- (بقية الكود لم يتغير) ---
+# --- معالجات الأزرار والمحادثات ---
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -372,6 +385,7 @@ async def conversation_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         if conn:
             conn.close()
 
+# --- الدالة الرئيسية ---
 def main():
     setup_database()
     application = Application.builder().token(TELEGRAM_TOKEN).build()
@@ -384,7 +398,7 @@ def main():
     application.add_handler(MessageHandler(filters.ChatType.GROUPS & (filters.TEXT | filters.CAPTION) & ~filters.COMMAND, group_message_handler), group=2)
     application.add_handler(MessageHandler(filters.ChatType.PRIVATE & ~filters.COMMAND, private_message_handler), group=3)
     
-    logger.info("البوت قيد التشغيل (الإصدار 5.0 - مع Cobalt)...")
+    logger.info("البوت قيد التشغيل (الإصدار 4.1 - yt-dlp المستقر)...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
