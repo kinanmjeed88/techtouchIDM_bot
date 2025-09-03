@@ -3,6 +3,7 @@ import logging
 import re
 import asyncio
 from datetime import timedelta
+import httpx
 
 # استيراد مكتبة قاعدة البيانات PostgreSQL
 import psycopg2
@@ -21,8 +22,8 @@ from telegram.ext import (
 from telegram.constants import ParseMode
 from telegram.error import BadRequest, Forbidden
 
-# --- استيراد المكتبة الجديدة (بالطريقة الصحيحة النهائية) ---
-from smd.downloader import Downloader
+# --- استيراد مكتبة Cobalt ---
+import pycobalt
 
 # استيراد مكتبة تحميل متغيرات البيئة
 from dotenv import load_dotenv
@@ -190,7 +191,7 @@ async def private_message_handler(update: Update, context: ContextTypes.DEFAULT_
         if conn:
             conn.close()
 
-# --- دالة التحميل الجديدة باستخدام SMD ---
+# --- دالة التحميل الجديدة باستخدام Cobalt ---
 async def media_downloader_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
     if not message or not message.text: return
@@ -200,36 +201,29 @@ async def media_downloader_handler(update: Update, context: ContextTypes.DEFAULT
         return
 
     processing_message = await message.reply_text("⏳ جاري معالجة الرابط...")
-    
-    download_folder = "downloads"
-    os.makedirs(download_folder, exist_ok=True)
 
     try:
-        # --- الإصلاح هنا: استخدام Downloader ---
-        downloader = Downloader(url=url, filepath=download_folder)
-        
-        loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, downloader.download)
+        # إرسال الرابط إلى Cobalt API
+        result = await pycobalt.get_video_info(url)
 
-        downloaded_files = os.listdir(download_folder)
-        if not downloaded_files:
-            raise Exception("لم يتم العثور على الملف بعد التحميل.")
+        # التحقق من نجاح العملية
+        if result['status'] != 'success':
+            logger.error(f"Cobalt API Error: {result.get('text', 'Unknown error')}")
+            error_message = "❌ فشل التحميل. قد يكون الرابط غير صحيح أو خاص."
+            if 'rate-limit' in result.get('text', ''):
+                error_message = "⚠️ نحن نواجه ضغطًا عاليًا. يرجى المحاولة مرة أخرى بعد قليل."
+            await processing_message.edit_text(error_message)
+            return
 
-        filepath = os.path.join(download_folder, downloaded_files[0])
-        
-        await context.bot.send_video(chat_id=message.chat_id, video=open(filepath, 'rb'), caption="✅ تم التحميل بنجاح")
-        
-        os.remove(filepath)
+        # إرسال الفيديو باستخدام الرابط المباشر من Cobalt
+        video_url = result['url']
+        await context.bot.send_video(chat_id=message.chat_id, video=video_url, caption="✅ تم التحميل بنجاح")
         await processing_message.delete()
 
     except Exception as e:
-        logger.error(f"خطأ في تحميل الفيديو باستخدام SMD: {e}")
-        await processing_message.edit_text("❌ حدث خطأ أثناء التحميل. قد يكون الفيديو خاصًا أو محذوفًا.")
-        for f in os.listdir(download_folder):
-            try:
-                os.remove(os.path.join(download_folder, f))
-            except OSError:
-                pass
+        logger.error(f"خطأ في التعامل مع Cobalt: {e}")
+        await processing_message.edit_text("❌ حدث خطأ غير متوقع أثناء معالجة طلبك.")
+
 
 # --- (بقية الكود لم يتغير) ---
 
@@ -390,7 +384,7 @@ def main():
     application.add_handler(MessageHandler(filters.ChatType.GROUPS & (filters.TEXT | filters.CAPTION) & ~filters.COMMAND, group_message_handler), group=2)
     application.add_handler(MessageHandler(filters.ChatType.PRIVATE & ~filters.COMMAND, private_message_handler), group=3)
     
-    logger.info("البوت قيد التشغيل (الإصدار 3.2 - مع إصلاح SMD النهائي)...")
+    logger.info("البوت قيد التشغيل (الإصدار 5.0 - مع Cobalt)...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
