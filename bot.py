@@ -108,10 +108,8 @@ async def is_user_group_admin(chat_id: int, user_id: int, context: ContextTypes.
         return True
     try:
         chat_member = await context.bot.get_chat_member(chat_id, user_id)
-        # المشرفون والمالكون يعتبرون إداريين
         return chat_member.status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]
     except (BadRequest, Forbidden):
-        # إذا لم يتمكن البوت من الحصول على معلومات العضو (مثلاً، ليس لديه صلاحيات)، نفترض أنه ليس مشرفًا
         return False
 
 # --- معالجات الأوامر والرسائل ---
@@ -137,7 +135,6 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if conn:
             conn.close()
 
-# --- التعديل الرئيسي هنا ---
 async def group_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
     if not message or not (message.text or message.caption): return
@@ -146,7 +143,6 @@ async def group_message_handler(update: Update, context: ContextTypes.DEFAULT_TY
     chat = update.effective_chat
     message_text = (message.text or message.caption).lower()
     
-    # التحقق مما إذا كان المستخدم مشرفًا في المجموعة أو المطور
     user_is_admin = await is_user_group_admin(chat.id, user.id, context)
 
     conn = get_db_connection()
@@ -157,9 +153,7 @@ async def group_message_handler(update: Update, context: ContextTypes.DEFAULT_TY
             cur.execute("INSERT INTO users (user_id) VALUES (%s) ON CONFLICT (user_id) DO NOTHING;", (user.id,))
             conn.commit()
 
-            # --- تطبيق القيود فقط إذا لم يكن المستخدم مشرفًا ---
             if not user_is_admin:
-                # 1. التحقق من الروابط
                 if re.search(r'https?://|t\.me/|www\.', message_text):
                     cur.execute("SELECT link_pattern FROM allowed_links;")
                     allowed_links = [row[0] for row in cur.fetchall()]
@@ -169,9 +163,8 @@ async def group_message_handler(update: Update, context: ContextTypes.DEFAULT_TY
                             await context.bot.send_message(chat.id, f"⚠️ {user.mention_html()}، يمنع إرسال الروابط.", parse_mode=ParseMode.HTML)
                         except Exception as e: 
                             logger.error(f"خطأ في حذف رابط: {e}")
-                        return # نوقف المعالجة بعد حذف الرسالة
+                        return
 
-                # 2. التحقق من الكلمات المحظورة
                 cur.execute("SELECT word, duration_minutes, warning_message FROM banned_words;")
                 banned_words = cur.fetchall()
                 for word, duration, warning in banned_words:
@@ -189,9 +182,8 @@ async def group_message_handler(update: Update, context: ContextTypes.DEFAULT_TY
                                 )
                         except Exception as e: 
                             logger.error(f"خطأ في حظر كلمة: {e}")
-                        return # نوقف المعالجة بعد تطبيق العقوبة
+                        return
 
-            # --- الردود التلقائية تعمل للجميع (بما في ذلك المشرفون) ---
             cur.execute("SELECT keyword, reply FROM auto_replies;")
             auto_replies = cur.fetchall()
             for keyword, reply in auto_replies:
@@ -239,8 +231,9 @@ async def media_downloader_handler(update: Update, context: ContextTypes.DEFAULT
     if not message or not message.text: return
     url = message.text.strip()
     
-    if not re.match(r'https?://', url):
-        return
+    # لا داعي للتحقق من الرابط هنا لأن الفلتر في main() سيقوم بذلك
+    # if not re.match(r'https?://', url):
+    #     return
 
     processing_message = await message.reply_text("⏳ جاري معالجة الرابط...")
     
@@ -252,7 +245,7 @@ async def media_downloader_handler(update: Update, context: ContextTypes.DEFAULT
         'outtmpl': os.path.join(download_folder, '%(id)s.%(ext)s'),
         'quiet': True,
         'noplaylist': True,
-        'max_filesize': 50 * 1024 * 1024,
+        'max_filesize': 50 * 1024 * 1024, # 50MB
     }
     
     try:
@@ -268,6 +261,7 @@ async def media_downloader_handler(update: Update, context: ContextTypes.DEFAULT
     except Exception as e:
         logger.error(f"خطأ في تحميل الفيديو باستخدام yt-dlp: {e}")
         await processing_message.edit_text("❌ حدث خطأ أثناء التحميل. قد يكون الفيديو خاصًا، محذوفًا، أو من منصة غير مدعومة حاليًا.")
+        # تنظيف أي ملفات جزئية في حالة الفشل
         for f in os.listdir(download_folder):
             try:
                 os.remove(os.path.join(download_folder, f))
@@ -471,11 +465,20 @@ def main():
     application.add_handler(CallbackQueryHandler(button_handler))
     application.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.User(ADMIN_ID), conversation_handler), group=-1)
     
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, media_downloader_handler), group=1)
+    # --- التعديل الرئيسي هنا ---
+    # تم إضافة فلتر `filters.ChatType.PRIVATE` و `filters.Entity("url")`
+    # هذا يجعل المعالج يعمل فقط في الخاص وفقط إذا كانت الرسالة تحتوي على رابط.
+    downloader_handler = MessageHandler(
+        filters.ChatType.PRIVATE & (filters.Entity("url") | filters.Entity("text_link")), 
+        media_downloader_handler
+    )
+    application.add_handler(downloader_handler, group=1)
+    
+    # بقية المعالجات
     application.add_handler(MessageHandler(filters.ChatType.GROUPS & (filters.TEXT | filters.CAPTION) & ~filters.COMMAND, group_message_handler), group=2)
     application.add_handler(MessageHandler(filters.ChatType.PRIVATE & ~filters.COMMAND, private_message_handler), group=3)
     
-    logger.info("البوت قيد التشغيل (الإصدار 4.7 - استثناء المشرفين)...")
+    logger.info("البوت قيد التشغيل (الإصدار 4.8 - تقييد التحميل للخاص)...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
