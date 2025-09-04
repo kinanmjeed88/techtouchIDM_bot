@@ -64,7 +64,16 @@ def setup_database():
             cur.execute("CREATE TABLE IF NOT EXISTS auto_replies (keyword TEXT PRIMARY KEY, reply TEXT NOT NULL);")
             cur.execute("CREATE TABLE IF NOT EXISTS banned_words (word TEXT PRIMARY KEY, duration_minutes INTEGER NOT NULL, warning_message TEXT);")
             cur.execute("CREATE TABLE IF NOT EXISTS allowed_links (link_pattern TEXT PRIMARY KEY);")
-            cur.execute("CREATE TABLE IF NOT EXISTS blocked_users (user_id BIGINT PRIMARY KEY, blocked_date TIMESTAMPTZ DEFAULT NOW());")
+            
+            # --- تعديل: إضافة حقول لاسم المستخدم والمعرف ---
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS blocked_users (
+                    user_id BIGINT PRIMARY KEY, 
+                    full_name TEXT,
+                    username TEXT,
+                    blocked_date TIMESTAMPTZ DEFAULT NOW()
+                );
+            """)
             
             cur.execute("INSERT INTO settings (key, value) VALUES ('welcome_message', 'أهلاً بك في البوت!') ON CONFLICT (key) DO NOTHING;")
             cur.execute("INSERT INTO settings (key, value) VALUES ('forward_reply_message', 'شكرًا لرسالتك، تم توصيلها للدعم وسنرد عليك قريبًا.') ON CONFLICT (key) DO NOTHING;")
@@ -78,6 +87,8 @@ def setup_database():
 
 def escape_markdown(text: str) -> str:
     """تهريب الأحرف الخاصة في MarkdownV2."""
+    if not text:
+        return ""
     escape_chars = r'_*[]()~`>#+-=|{}.!'
     return re.sub(f'([{re.escape(escape_chars)}])', r'\\\1', text)
 
@@ -231,10 +242,6 @@ async def media_downloader_handler(update: Update, context: ContextTypes.DEFAULT
     if not message or not message.text: return
     url = message.text.strip()
     
-    # لا داعي للتحقق من الرابط هنا لأن الفلتر في main() سيقوم بذلك
-    # if not re.match(r'https?://', url):
-    #     return
-
     processing_message = await message.reply_text("⏳ جاري معالجة الرابط...")
     
     download_folder = "downloads"
@@ -261,7 +268,6 @@ async def media_downloader_handler(update: Update, context: ContextTypes.DEFAULT
     except Exception as e:
         logger.error(f"خطأ في تحميل الفيديو باستخدام yt-dlp: {e}")
         await processing_message.edit_text("❌ حدث خطأ أثناء التحميل. قد يكون الفيديو خاصًا، محذوفًا، أو من منصة غير مدعومة حاليًا.")
-        # تنظيف أي ملفات جزئية في حالة الفشل
         for f in os.listdir(download_folder):
             try:
                 os.remove(os.path.join(download_folder, f))
@@ -284,12 +290,18 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 context.user_data['next_step'] = 'broadcast_message'
             
             elif data == "admin_blocked_list":
-                cur.execute("SELECT user_id, TO_CHAR(blocked_date, 'YYYY-MM-DD') FROM blocked_users ORDER BY blocked_date DESC;")
-                blocked = cur.fetchall()
+                # --- تعديل: جلب وعرض معلومات المستخدم الكاملة ---
+                cur.execute("SELECT user_id, full_name, username, TO_CHAR(blocked_date, 'YYYY-MM-DD') FROM blocked_users ORDER BY blocked_date DESC;")
+                blocked_users = cur.fetchall()
                 text = "📵 *قائمة المستخدمين الذين قاموا بحظر البوت:*\n\n"
-                if blocked:
-                    lines = [escape_markdown(f"- `{uid}` (بتاريخ: {date})") for uid, date in blocked]
-                    text += "\n".join(lines)
+                if blocked_users:
+                    lines = []
+                    for uid, full_name, username, date in blocked_users:
+                        safe_name = escape_markdown(full_name)
+                        safe_username = escape_markdown(f"@{username}" if username and username != "غير متوفر" else "N/A")
+                        line = f"- *{safe_name}* ({safe_username})\n  ID: `{uid}`\n  تاريخ: {date}"
+                        lines.append(line)
+                    text += "\n\n".join(lines)
                 else:
                     text += escape_markdown("لا يوجد أي مستخدمين في قائمة الحظر حاليًا.")
                 
@@ -399,7 +411,24 @@ async def conversation_handler(update: Update, context: ContextTypes.DEFAULT_TYP
                         await asyncio.sleep(0.05)
                     except Forbidden:
                         logger.warning(f"المستخدم {uid} حظر البوت. سيتم نقله إلى قائمة الحظر.")
-                        cur.execute("INSERT INTO blocked_users (user_id) VALUES (%s) ON CONFLICT (user_id) DO NOTHING;", (uid,))
+                        # --- تعديل: جلب وتخزين معلومات المستخدم ---
+                        try:
+                            user_info = await context.bot.get_chat(uid)
+                            full_name = user_info.full_name
+                            username = user_info.username or "غير متوفر"
+                        except Exception as e:
+                            logger.error(f"فشل جلب معلومات المستخدم {uid}: {e}")
+                            full_name = "غير معروف"
+                            username = "غير معروف"
+
+                        cur.execute("""
+                            INSERT INTO blocked_users (user_id, full_name, username) 
+                            VALUES (%s, %s, %s) 
+                            ON CONFLICT (user_id) DO UPDATE SET 
+                                full_name = EXCLUDED.full_name, 
+                                username = EXCLUDED.username,
+                                blocked_date = NOW();
+                        """, (uid, full_name, username))
                         cur.execute("DELETE FROM users WHERE user_id = %s;", (uid,))
                         conn.commit()
                         f += 1
@@ -465,20 +494,16 @@ def main():
     application.add_handler(CallbackQueryHandler(button_handler))
     application.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.User(ADMIN_ID), conversation_handler), group=-1)
     
-    # --- التعديل الرئيسي هنا ---
-    # تم إضافة فلتر `filters.ChatType.PRIVATE` و `filters.Entity("url")`
-    # هذا يجعل المعالج يعمل فقط في الخاص وفقط إذا كانت الرسالة تحتوي على رابط.
     downloader_handler = MessageHandler(
         filters.ChatType.PRIVATE & (filters.Entity("url") | filters.Entity("text_link")), 
         media_downloader_handler
     )
     application.add_handler(downloader_handler, group=1)
     
-    # بقية المعالجات
     application.add_handler(MessageHandler(filters.ChatType.GROUPS & (filters.TEXT | filters.CAPTION) & ~filters.COMMAND, group_message_handler), group=2)
     application.add_handler(MessageHandler(filters.ChatType.PRIVATE & ~filters.COMMAND, private_message_handler), group=3)
     
-    logger.info("البوت قيد التشغيل (الإصدار 4.8 - تقييد التحميل للخاص)...")
+    logger.info("البوت قيد التشغيل...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
